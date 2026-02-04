@@ -1,0 +1,29 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// OTA Configuration
+#define OTA_PASSWORD "your-ota-password-here"
+#define OTA_HOSTNAME "turntable-streamer"
+
+// WiFi Configuration (optional - can use WiFiManager portal instead)
+// #define WIFI_SSID "your-wifi-ssid"
+// #define WIFI_PASSWORD "your-wifi-password"
+
+// Audio Configuration
+#define SAMPLE_RATE 48000
+#define BITS_PER_SAMPLE 16
+#define CHANNELS 2
+
+// I2S Pin Configuration
+#define I2S_BCK_PIN 25
+#define I2S_WS_PIN 26
+#define I2S_DATA_IN_PIN 27
+
+// Network Configuration
+#define AP_SSID "TurntableStreamer"
+#define AP_PASSWORD ""  // Empty for open AP
+
+// Optional: LED Pin for status indicators
+#define STATUS_LED_PIN 2
+
+#endif
