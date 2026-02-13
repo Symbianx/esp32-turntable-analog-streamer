@@ -23,3 +23,4 @@ Thumbs.db
 *.bin
 *.elf
 *.map
+samples/

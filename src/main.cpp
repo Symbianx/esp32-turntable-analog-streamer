@@ -5,6 +5,10 @@
 #include <ESPmDNS.h>
 #include "AudioTools.h"
 
+bool debugCaptured = false;
+const size_t DEBUG_SAMPLES = 5000; // ~0.1s at 44.1k
+size_t debugCount = 0;
+
 // Audio Tools I2S
 I2SStream i2sStream;
 
@@ -89,7 +93,17 @@ void audioTask(void *param)
 
         int32_t sample32 = ((int32_t *)buffer)[i];
         samples16[i] = (int16_t)(sample32 >> 16);
-        // If this sounds quiet/garbage, try: samples16[i] = (int16_t)sample32; 
+
+        if (!debugCaptured && debugCount < DEBUG_SAMPLES)
+        {
+          // Capture just left channel for analysis
+          Serial.println(samples16[i]);
+          debugCount++;
+          if (debugCount >= DEBUG_SAMPLES)
+          {
+            debugCaptured = true;
+          }
+        }
       }
 
       // Write to WAV buffer if client connected and space available
