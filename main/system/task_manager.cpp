@@ -1,7 +1,10 @@
 #include "task_manager.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <cstdlib>
+#include <cstring>
 
 static const char *TAG = "task_manager";
 
@@ -110,32 +113,57 @@ bool TaskManager::create_metrics_task(TaskFunction_t task_func, void *params)
     }
 }
 
+// CPU usage tracking
+static uint32_t cpu_usage_val[2] = {0, 0};
+
+static void update_cpu_usage()
+{
+    static uint32_t prev_idle[2] = {0, 0};
+    static uint32_t prev_total = 0;
+    static int64_t last_update_us = 0;
+
+    int64_t now = esp_timer_get_time();
+    if (now - last_update_us < 2000000) return; // Update at most every 2s
+    last_update_us = now;
+
+    TaskHandle_t idle0 = xTaskGetIdleTaskHandleForCore(0);
+    TaskHandle_t idle1 = xTaskGetIdleTaskHandleForCore(1);
+    if (!idle0 || !idle1) return;
+
+    UBaseType_t num = uxTaskGetNumberOfTasks();
+    TaskStatus_t *tasks = (TaskStatus_t *)malloc(num * sizeof(TaskStatus_t));
+    if (!tasks) return;
+
+    uint32_t total;
+    num = uxTaskGetSystemState(tasks, num, &total);
+
+    uint32_t idle_time[2] = {0, 0};
+    for (UBaseType_t i = 0; i < num; i++) {
+        if (tasks[i].xHandle == idle0) idle_time[0] = tasks[i].ulRunTimeCounter;
+        if (tasks[i].xHandle == idle1) idle_time[1] = tasks[i].ulRunTimeCounter;
+    }
+    free(tasks);
+
+    uint32_t dt = total - prev_total;
+    if (dt > 0) {
+        for (int c = 0; c < 2; c++) {
+            uint32_t di = idle_time[c] - prev_idle[c];
+            uint32_t usage = 100 - (di * 100 / dt);
+            cpu_usage_val[c] = (usage > 100) ? 0 : usage;
+            prev_idle[c] = idle_time[c];
+        }
+    }
+    prev_total = total;
+}
+
 uint32_t TaskManager::get_cpu_usage_core0()
 {
-    // Get idle task handle for Core 0
-    TaskHandle_t idle_task = xTaskGetIdleTaskHandleForCore(AUDIO_CORE);
-    if (idle_task == nullptr) {
-        return 0;
-    }
-    
-    // Get runtime stats (requires CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS)
-    TaskStatus_t task_status;
-    vTaskGetInfo(idle_task, &task_status, pdFALSE, eInvalid);
-    
-    // CPU usage = 100 - (idle_time_percentage)
-    // This is a simplified calculation; full implementation would track
-    // total runtime across all tasks and compute percentages
-    return 0; // Placeholder - requires full runtime stats implementation
+    update_cpu_usage();
+    return cpu_usage_val[0];
 }
 
 uint32_t TaskManager::get_cpu_usage_core1()
 {
-    // Get idle task handle for Core 1
-    TaskHandle_t idle_task = xTaskGetIdleTaskHandleForCore(NETWORK_CORE);
-    if (idle_task == nullptr) {
-        return 0;
-    }
-    
-    // Same approach as Core 0
-    return 0; // Placeholder - requires full runtime stats implementation
+    update_cpu_usage();
+    return cpu_usage_val[1];
 }

@@ -37,13 +37,11 @@ static void audio_capture_task(void *params)
     
     uint32_t clip_counter = 0;
     uint32_t read_count = 0;
+    int64_t last_good_read = esp_timer_get_time();
     
     ESP_LOGI(TAG, "Starting audio capture loop");
     
     while (capture_running.load(std::memory_order_acquire)) {
-        // Reset watchdog timer (skip if not initialized)
-        // Watchdog::reset();  // Disabled for now
-        
         // Read from I²S DMA
         size_t bytes_read = 0;
         if (!I2SMaster::read(dma_buffer, DMA_READ_SIZE, &bytes_read, 100)) {
@@ -53,6 +51,14 @@ static void audio_capture_task(void *params)
                 if (underrun_count % 100 == 1) {
                     ESP_LOGW(TAG, "I²S read underrun (count: %lu)", underrun_count.load());
                 }
+                // I²S failure detection: no data for 5 seconds → attempt reset
+                if (esp_timer_get_time() - last_good_read > 5000000) {
+                    ESP_LOGE(TAG, "No I²S data for 5s, attempting reset");
+                    I2SMaster::stop();
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    I2SMaster::start();
+                    last_good_read = esp_timer_get_time();
+                }
             }
             continue;
         }
@@ -60,6 +66,8 @@ static void audio_capture_task(void *params)
         if (bytes_read == 0) {
             continue;
         }
+        
+        last_good_read = esp_timer_get_time();
         
         // Convert from 32-bit I²S slots to 24-bit packed WAV format
         // ESP32 I²S reads: [L_byte0 L_byte1 L_byte2 L_byte3] [R_byte0 R_byte1 R_byte2 R_byte3]
@@ -129,6 +137,28 @@ static void audio_capture_task(void *params)
         if (!AudioBuffer::write(converted_buffer, converted_size)) {
             ErrorHandler::log_error(ErrorType::SYSTEM_ERROR, 
                                     "Failed to write to ring buffer");
+        }
+        
+        // Lightweight clipping check: test first sample pair per chunk
+        if (converted_size >= 6) {
+            int32_t sample = (int32_t)(converted_buffer[0] |
+                                       (converted_buffer[1] << 8) |
+                                       (converted_buffer[2] << 16));
+            if (sample & 0x800000) sample |= 0xFF000000;
+            if (abs(sample) > CLIP_THRESHOLD) {
+                clip_counter++;
+            } else if (clip_counter > 0) {
+                clip_counter--;
+            }
+            if (clip_counter > CLIP_DURATION_FRAMES / DMA_READ_SIZE) {
+                if (!clipping_detected.load(std::memory_order_relaxed)) {
+                    ESP_LOGW(TAG, "Sustained clipping detected");
+                    clipping_detected.store(true, std::memory_order_release);
+                }
+            } else if (clip_counter == 0 && clipping_detected.load(std::memory_order_relaxed)) {
+                ESP_LOGI(TAG, "Clipping cleared");
+                clipping_detected.store(false, std::memory_order_release);
+            }
         }
         
         // Update frame counter

@@ -94,7 +94,7 @@
 - [X] T031 [US2] Implement GET /config endpoint returning current config (password masked) as JSON in main/network/config_portal.cpp
 - [X] T032 [US2] Implement POST /config endpoint: validate input, save to NVS, trigger WiFi reconnect with new credentials, return success/error JSON in main/network/config_portal.cpp
 - [X] T033 [US2] Implement captive portal root handler: serve config page in AP mode, redirect to /status in STA mode for GET / in main/network/config_portal.cpp
-- [X] T034 [P] [US2] Implement mDNS service advertisement: hostname "esp32-audio-stream", HTTP service on port 8080 in main/network/wifi_manager.cpp
+- [ ] T034 [P] [US2] Implement mDNS service advertisement: hostname "esp32-audio-stream", HTTP service on port 8080 in main/network/wifi_manager.cpp *(stub only — deferred due to ESP-IDF v5.3.4 mdns component incompatibility)*
 - [X] T035 [US2] Register config portal routes in HTTP server and wire AP mode startup in main/main.cpp
 - [ ] T036 [US2] End-to-end validation: erase NVS, power on, connect to AP, configure WiFi via portal, verify STA connection, verify mDNS resolution, verify stream accessible via esp32-audio-stream.local:8080/stream
 
@@ -110,13 +110,13 @@
 
 ### Implementation for User Story 3
 
-- [ ] T037 [US3] Implement system metrics collector: CPU usage per core (using FreeRTOS idle hook), heap stats, uptime, WiFi RSSI polling in main/system/task_manager.cpp
-- [ ] T038 [US3] Implement audio metrics aggregation: buffer fill %, underrun/overrun counts, clipping status, total frames captured in main/audio/audio_capture.cpp
-- [ ] T039 [US3] Implement GET /status JSON endpoint: assemble DeviceStatus response from SystemMetrics + AudioStream + network state per contracts/http-api.yaml schema in main/network/http_server.cpp
-- [ ] T040 [P] [US3] Implement GET /status HTML endpoint: mobile-responsive status page with auto-refresh meta tag (5s), color-coded health indicators, stream URL with copy button in main/network/http_server.cpp
-- [ ] T041 [US3] Implement content negotiation for /status: return JSON when Accept: application/json, HTML otherwise in main/network/http_server.cpp
-- [ ] T042 [US3] Implement clipping indicator: detect sustained near-max samples (>1s), set flag in AudioStream state, display warning on status page in main/audio/audio_capture.cpp
-- [ ] T043 [US3] Implement CPU usage warning: highlight >50% Core 0 usage with visual warning on HTML status page in main/network/http_server.cpp
+- [X] T037 [US3] Implement system metrics collector: CPU usage per core (using FreeRTOS idle hook), heap stats, uptime, WiFi RSSI polling in main/system/task_manager.cpp
+- [X] T038 [US3] Implement audio metrics aggregation: buffer fill %, underrun/overrun counts, clipping status, total frames captured in main/audio/audio_capture.cpp
+- [X] T039 [US3] Implement GET /status JSON endpoint: assemble DeviceStatus response from SystemMetrics + AudioStream + network state per contracts/http-api.yaml schema in main/network/http_server.cpp
+- [X] T040 [P] [US3] Implement GET /status HTML endpoint: mobile-responsive status page with auto-refresh meta tag (5s), color-coded health indicators, stream URL with copy button in main/network/http_server.cpp
+- [X] T041 [US3] Implement content negotiation for /status: return JSON when Accept: application/json, HTML otherwise in main/network/http_server.cpp
+- [X] T042 [US3] Implement clipping indicator: detect sustained near-max samples (>1s), set flag in AudioStream state, display warning on status page in main/audio/audio_capture.cpp
+- [X] T043 [US3] Implement CPU usage warning: highlight >50% Core 0 usage with visual warning on HTML status page in main/network/http_server.cpp
 - [ ] T044 [US3] End-to-end validation: navigate to /status in browser, verify all metrics present and updating, check JSON response format matches contracts/http-api.yaml DeviceStatus schema
 
 **Checkpoint**: Full diagnostics dashboard operational. All metrics visible, auto-refreshing, mobile-friendly.
@@ -127,12 +127,12 @@
 
 **Purpose**: Hardening, edge cases, documentation, and cross-story integration
 
-- [ ] T045 [P] Implement edge case: stream silence (zero samples) when no audio source connected without crash in main/audio/audio_capture.cpp
-- [ ] T046 [P] Implement edge case: I²S failure detection (no data within 5s), log error, display on status page, attempt reset/recovery in main/audio/pcm1808_driver.cpp
-- [ ] T047 [P] Implement edge case: graceful sample rate change while streaming — disconnect clients, reconfigure I²S, new stream within 3s in main/audio/i2s_master.cpp
-- [ ] T048 Implement serial logging for all state transitions: boot, WiFi connect/disconnect, client connect/disconnect, errors, sample rate changes in main/system/error_handler.cpp
-- [ ] T049 [P] Add CORS headers (Access-Control-Allow-Origin: *) to all HTTP responses for browser compatibility in main/network/http_server.cpp
-- [ ] T050 Review and validate all GPIO assignments against ESP32-WROVER datasheet for pin conflicts (GPIO0 boot strapping, PSRAM pins) — document in README.md
+- [X] T045 [P] Implement edge case: stream silence (zero samples) when no audio source connected without crash in main/audio/audio_capture.cpp
+- [X] T046 [P] Implement edge case: I²S failure detection (no data within 5s), log error, display on status page, attempt reset/recovery in main/audio/pcm1808_driver.cpp
+- [X] T047 [P] Implement edge case: graceful sample rate change while streaming — disconnect clients, reconfigure I²S, new stream within 3s in main/audio/i2s_master.cpp
+- [X] T048 Implement serial logging for all state transitions: boot, WiFi connect/disconnect, client connect/disconnect, errors, sample rate changes in main/system/error_handler.cpp
+- [X] T049 [P] Add CORS headers (Access-Control-Allow-Origin: *) to all HTTP responses for browser compatibility in main/network/http_server.cpp
+- [X] T050 Review and validate all GPIO assignments against ESP32-WROVER datasheet for pin conflicts (GPIO0 boot strapping, PSRAM pins) — document in README.md
 - [ ] T051 Run quickstart.md validation: follow quickstart.md end-to-end on fresh device, verify all steps work, update any discrepancies
 - [ ] T052 Final stress test: 4-hour continuous streaming at 48kHz, monitor for underruns, memory leaks, WiFi stability via /status endpoint
 

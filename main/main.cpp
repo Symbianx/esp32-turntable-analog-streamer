@@ -107,6 +107,9 @@ extern "C" void app_main() {
     }
     ESP_LOGI(TAG, "HTTP server started");
     
+    // Register config portal routes (for / redirect to /status in STA mode)
+    ConfigPortal::init(HTTPServer::get_server_handle());
+    
     // Initialize audio buffer
     if (!AudioBuffer::init()) {
         ESP_LOGE(TAG, "Failed to initialize audio buffer");
