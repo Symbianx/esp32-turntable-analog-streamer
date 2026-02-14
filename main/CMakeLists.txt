@@ -1,0 +1,18 @@
+idf_component_register(
+    SRCS
+        "main.cpp"
+        "audio/i2s_master.cpp"
+        "audio/pcm1808_driver.cpp"
+        "audio/audio_capture.cpp"
+        "audio/audio_buffer.cpp"
+        "network/wifi_manager.cpp"
+        "network/config_portal.cpp"
+        "network/http_server.cpp"
+        "network/stream_handler.cpp"
+        "storage/nvs_config.cpp"
+        "system/task_manager.cpp"
+        "system/watchdog.cpp"
+        "system/error_handler.cpp"
+    INCLUDE_DIRS
+        "."
+)

@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+## ESP-IDF Component Registry Dependencies
+
+dependencies:
+  espressif/mdns:
+    version: "^1.0.0"

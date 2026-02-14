@@ -1,0 +1,510 @@
+openapi: "3.0.3"
+info:
+  title: ESP32 Audio Streamer HTTP API
+  description: |
+    HTTP API for the ESP32 PCM1808 audio streaming device.
+    Provides audio streaming, device status, and configuration endpoints.
+    Runs on the ESP32 using esp_http_server.
+  version: "1.0.0"
+  contact:
+    name: turntable-esp32-upnp-streamer
+  x-security-note: |
+    No authentication is required for any endpoint. The device operates on a
+    trusted local network (WPA2-PSK secured WiFi). All endpoints are open access.
+
+servers:
+  - url: "http://{device_ip}:{port}"
+    description: Device on local network (STA mode)
+    variables:
+      device_ip:
+        default: "esp32-audio-stream.local"
+        description: Device IP or mDNS hostname
+      port:
+        default: "8080"
+        description: HTTP server port (configurable)
+  - url: "http://192.168.4.1"
+    description: Device in AP/configuration mode
+
+paths:
+  /stream:
+    get:
+      summary: Audio stream endpoint
+      description: |
+        Returns a continuous, uncompressed WAV audio stream from the PCM1808 ADC.
+        The response begins with a 44-byte WAV header followed by infinite chunked
+        PCM audio data. The connection remains open until the client disconnects.
+        Maximum 3 concurrent streaming clients (FR-014).
+      operationId: getAudioStream
+      tags:
+        - Audio
+      responses:
+        "200":
+          description: Audio stream started successfully
+          headers:
+            Transfer-Encoding:
+              schema:
+                type: string
+                enum: ["chunked"]
+            Cache-Control:
+              schema:
+                type: string
+                enum: ["no-cache, no-store"]
+            Connection:
+              schema:
+                type: string
+                enum: ["keep-alive"]
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+                enum: ["*"]
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+                description: |
+                  44-byte WAV header (RIFF/WAVE/fmt/data) followed by
+                  continuous interleaved stereo 24-bit PCM samples.
+                  Byte order: little-endian.
+                  Frame size: 6 bytes (3 bytes × 2 channels).
+        "503":
+          description: Maximum concurrent clients reached
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                example: 5
+                description: Suggested retry delay in seconds
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Maximum streaming clients reached. Try again later."
+
+  /status:
+    get:
+      summary: Device status and diagnostics
+      description: |
+        Returns real-time device metrics including audio stream status,
+        system health, and network information. Used for monitoring and
+        troubleshooting (FR-020, User Story 3).
+      operationId: getDeviceStatus
+      tags:
+        - Diagnostics
+      responses:
+        "200":
+          description: Device status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceStatus"
+              example:
+                audio:
+                  sample_rate: 48000
+                  bit_depth: 24
+                  channels: 2
+                  is_streaming: true
+                  buffer_fill_pct: 72.5
+                  clipping_detected: false
+                  total_frames_captured: 8640000
+                  underrun_count: 0
+                  overrun_count: 0
+                system:
+                  cpu_usage_core0: 42.3
+                  cpu_usage_core1: 28.7
+                  heap_free_bytes: 189440
+                  heap_min_free_bytes: 156800
+                  uptime_seconds: 3600
+                  i2s_error_count: 0
+                network:
+                  wifi_connected: true
+                  wifi_rssi: -52
+                  ip_address: "192.168.1.42"
+                  stream_url: "http://192.168.1.42:8080/stream"
+                  active_clients: 1
+                  max_clients: 3
+                device:
+                  name: "ESP32-Audio-Stream"
+                  firmware_version: "1.0.0"
+                  mac_address: "AA:BB:CC:DD:EE:FF"
+            text/html:
+              schema:
+                type: string
+                description: |
+                  Human-readable HTML status page with auto-refresh (5s).
+                  Displays all metrics in a mobile-friendly layout.
+                  Returned when Accept header prefers text/html.
+
+  /config:
+    get:
+      summary: Get current configuration
+      description: |
+        Returns current device configuration. Only available in AP mode
+        or from the local network. Passwords are masked in response.
+      operationId: getConfig
+      tags:
+        - Configuration
+      responses:
+        "200":
+          description: Current configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceConfigResponse"
+              example:
+                wifi_ssid: "MyHomeNetwork"
+                wifi_password_set: true
+                sample_rate: 48000
+                device_name: "ESP32-Audio-Stream"
+                http_port: 8080
+                max_clients: 3
+
+    post:
+      summary: Update device configuration
+      description: |
+        Updates device configuration and saves to NVS. If WiFi credentials
+        change, the device will attempt to connect to the new network.
+        Available in both AP and STA modes.
+      operationId: updateConfig
+      tags:
+        - Configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceConfigUpdate"
+            example:
+              wifi_ssid: "MyHomeNetwork"
+              wifi_password: "my-secure-password"
+              sample_rate: 48000
+              device_name: "ESP32-Audio-Stream"
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/DeviceConfigUpdate"
+            description: Also accepts form POST from the captive portal HTML form.
+      responses:
+        "200":
+          description: Configuration saved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigUpdateResponse"
+              example:
+                success: true
+                message: "Configuration saved. Connecting to WiFi..."
+                restart_required: false
+        "400":
+          description: Invalid configuration values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                success: false
+                error: "Invalid sample rate. Must be 44100, 48000, or 96000."
+
+  /wifi/scan:
+    get:
+      summary: Scan for available WiFi networks
+      description: |
+        Triggers a WiFi scan and returns the list of discovered access points.
+        Used by the captive portal to populate the SSID dropdown.
+        Only functional when device is in AP mode.
+      operationId: scanWifiNetworks
+      tags:
+        - Configuration
+      responses:
+        "200":
+          description: Scan results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WifiScanResults"
+              example:
+                networks:
+                  - ssid: "MyHomeNetwork"
+                    rssi: -45
+                    auth: "WPA2"
+                  - ssid: "Neighbor_5G"
+                    rssi: -72
+                    auth: "WPA2"
+                  - ssid: "OpenNetwork"
+                    rssi: -80
+                    auth: "OPEN"
+
+  /:
+    get:
+      summary: Captive portal landing page
+      description: |
+        Serves the configuration portal HTML page. In AP mode, this is the
+        captive portal that opens automatically on device connection.
+        In STA mode, redirects to /status.
+      operationId: getPortalPage
+      tags:
+        - Configuration
+      responses:
+        "200":
+          description: Configuration portal HTML page
+          content:
+            text/html:
+              schema:
+                type: string
+                description: |
+                  Mobile-responsive HTML page (min 320px width) with:
+                  - WiFi SSID selector (populated from /wifi/scan)
+                  - WiFi password field
+                  - Sample rate selector (44.1kHz / 48kHz / 96kHz)
+                  - Device name field
+                  - Save button (POSTs to /config)
+        "302":
+          description: Redirect to /status when in STA mode
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "/status"
+
+components:
+  schemas:
+    DeviceStatus:
+      type: object
+      required:
+        - audio
+        - system
+        - network
+        - device
+      properties:
+        audio:
+          type: object
+          required:
+            - sample_rate
+            - bit_depth
+            - channels
+            - is_streaming
+            - buffer_fill_pct
+          properties:
+            sample_rate:
+              type: integer
+              enum: [44100, 48000, 96000]
+              description: Active sample rate in Hz
+            bit_depth:
+              type: integer
+              enum: [24]
+              description: Bits per sample (PCM1808 native)
+            channels:
+              type: integer
+              enum: [2]
+              description: Number of audio channels (stereo)
+            is_streaming:
+              type: boolean
+              description: Whether I²S capture is active
+            buffer_fill_pct:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 100
+              description: Ring buffer fill level percentage
+            clipping_detected:
+              type: boolean
+              description: Whether sustained ADC clipping is occurring
+            total_frames_captured:
+              type: integer
+              format: int64
+              description: Total audio frames captured since boot
+            underrun_count:
+              type: integer
+              description: Buffer underrun event count
+            overrun_count:
+              type: integer
+              description: Buffer overrun event count
+
+        system:
+          type: object
+          required:
+            - cpu_usage_core0
+            - cpu_usage_core1
+            - heap_free_bytes
+            - uptime_seconds
+          properties:
+            cpu_usage_core0:
+              type: number
+              format: float
+              description: Audio core CPU usage percentage
+            cpu_usage_core1:
+              type: number
+              format: float
+              description: Network core CPU usage percentage
+            heap_free_bytes:
+              type: integer
+              description: Free heap memory in bytes
+            heap_min_free_bytes:
+              type: integer
+              description: Minimum free heap since boot (watermark)
+            uptime_seconds:
+              type: integer
+              description: Seconds since device boot
+            i2s_error_count:
+              type: integer
+              description: Cumulative I²S communication errors
+
+        network:
+          type: object
+          required:
+            - wifi_connected
+            - active_clients
+            - max_clients
+          properties:
+            wifi_connected:
+              type: boolean
+              description: WiFi station connection status
+            wifi_rssi:
+              type: integer
+              minimum: -100
+              maximum: 0
+              description: WiFi signal strength in dBm
+            ip_address:
+              type: string
+              format: ipv4
+              description: Device IP address on the local network
+            stream_url:
+              type: string
+              format: uri
+              description: Full URL to the audio stream
+            active_clients:
+              type: integer
+              minimum: 0
+              maximum: 5
+              description: Number of currently connected streaming clients
+            max_clients:
+              type: integer
+              description: Maximum allowed concurrent streaming clients
+
+        device:
+          type: object
+          properties:
+            name:
+              type: string
+              description: Device display name
+            firmware_version:
+              type: string
+              description: Firmware version string
+            mac_address:
+              type: string
+              pattern: "^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$"
+              description: Device MAC address
+
+    DeviceConfigResponse:
+      type: object
+      properties:
+        wifi_ssid:
+          type: string
+          maxLength: 32
+          description: Configured WiFi SSID
+        wifi_password_set:
+          type: boolean
+          description: Whether a WiFi password is stored (never returns actual password)
+        sample_rate:
+          type: integer
+          enum: [44100, 48000, 96000]
+          description: Configured sample rate in Hz
+        device_name:
+          type: string
+          maxLength: 32
+          description: Device name for mDNS and display
+        http_port:
+          type: integer
+          minimum: 1024
+          maximum: 65535
+          description: HTTP server port
+        max_clients:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Maximum concurrent streaming clients
+
+    DeviceConfigUpdate:
+      type: object
+      properties:
+        wifi_ssid:
+          type: string
+          minLength: 1
+          maxLength: 32
+          description: WiFi network SSID
+        wifi_password:
+          type: string
+          maxLength: 64
+          description: WiFi network password
+        sample_rate:
+          type: integer
+          enum: [44100, 48000, 96000]
+          description: Desired sample rate in Hz
+        device_name:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: "^[a-zA-Z0-9-]+$"
+          description: Device name (alphanumeric and hyphens only)
+        http_port:
+          type: integer
+          minimum: 1024
+          maximum: 65535
+          description: HTTP server port
+        max_clients:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Maximum concurrent streaming clients
+
+    ConfigUpdateResponse:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        restart_required:
+          type: boolean
+          description: Whether a device restart is needed to apply changes
+
+    WifiScanResults:
+      type: object
+      required:
+        - networks
+      properties:
+        networks:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required:
+              - ssid
+              - rssi
+              - auth
+            properties:
+              ssid:
+                type: string
+                description: Network SSID
+              rssi:
+                type: integer
+                description: Signal strength in dBm
+              auth:
+                type: string
+                enum: ["OPEN", "WEP", "WPA", "WPA2", "WPA3", "WPA2_ENTERPRISE"]
+                description: Authentication type
+
+    ErrorResponse:
+      type: object
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: string
+          description: Human-readable error message
