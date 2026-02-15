@@ -155,8 +155,8 @@ bool AudioBuffer::register_client(uint8_t client_id)
     }
     
     // Set client read position BEHIND write position to allow buffering
-    // Start 500ms behind (48000 Hz * 2 ch * 3 bytes * 0.5s = 144000 bytes)
-    constexpr uint32_t START_BUFFER = 144000;
+    // Start 1.5s behind for weak WiFi tolerance (48000 Hz * 2 ch * 3 bytes * 1.5s = 432000 bytes)
+    constexpr uint32_t START_BUFFER = 432000;
     uint32_t wp = write_pos.load(std::memory_order_acquire);
     uint32_t rp = (wp >= START_BUFFER) ? (wp - START_BUFFER) : (RING_BUFFER_SIZE - START_BUFFER + wp);
     

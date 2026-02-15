@@ -133,6 +133,7 @@
 - [X] T048 Implement serial logging for all state transitions: boot, WiFi connect/disconnect, client connect/disconnect, errors, sample rate changes in main/system/error_handler.cpp
 - [X] T049 [P] Add CORS headers (Access-Control-Allow-Origin: *) to all HTTP responses for browser compatibility in main/network/http_server.cpp
 - [X] T050 Review and validate all GPIO assignments against ESP32-WROVER datasheet for pin conflicts (GPIO0 boot strapping, PSRAM pins) — document in README.md
+- [X] T053 [BUGFIX] Refactor stream_handler to use async request handling: create async request copy with httpd_req_async_handler_begin(), spawn streaming task on Core 1, return immediately to free worker thread, call httpd_req_async_handler_complete() when done in main/network/http_server.cpp
 - [ ] T051 Run quickstart.md validation: follow quickstart.md end-to-end on fresh device, verify all steps work, update any discrepancies
 - [ ] T052 Final stress test: 4-hour continuous streaming at 48kHz, monitor for underruns, memory leaks, WiFi stability via /status endpoint
 

@@ -98,41 +98,6 @@ static void audio_capture_task(void *params)
                      converted_buffer[0], converted_buffer[1], converted_buffer[2]);
         }
         
-        // Skip clipping detection - too expensive in hot path
-        // TODO: Move to separate lower-priority task if needed
-        /*
-        bool clipping_this_frame = false;
-        for (size_t i = 0; i < converted_size; i += 3) {
-            int32_t sample = (int32_t)((converted_buffer[i]) | 
-                                       (converted_buffer[i+1] << 8) | 
-                                       (converted_buffer[i+2] << 16));
-            if (sample & 0x800000) sample |= 0xFF000000;
-            
-            if (abs(sample) > CLIP_THRESHOLD) {
-                clipping_this_frame = true;
-                break;
-            }
-        }
-        
-        if (clipping_this_frame) {
-            clip_counter++;
-            if (clip_counter > CLIP_DURATION_FRAMES) {
-                if (!clipping_detected.load(std::memory_order_acquire)) {
-                    ESP_LOGW(TAG, "Sustained clipping detected");
-                    clipping_detected.store(true, std::memory_order_release);
-                }
-            }
-        } else {
-            if (clip_counter > 0) {
-                clip_counter--;
-            }
-            if (clip_counter == 0 && clipping_detected.load(std::memory_order_acquire)) {
-                ESP_LOGI(TAG, "Clipping cleared");
-                clipping_detected.store(false, std::memory_order_release);
-            }
-        }
-        */
-        
         // Write converted 24-bit data to ring buffer
         if (!AudioBuffer::write(converted_buffer, converted_size)) {
             ErrorHandler::log_error(ErrorType::SYSTEM_ERROR, 

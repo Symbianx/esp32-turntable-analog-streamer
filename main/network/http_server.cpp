@@ -126,17 +126,17 @@ static void stream_task(void *arg)
             break;
         }
 
-        // Pace sends to match audio production rate.
-        // Calculate how long this chunk represents in real-time, then wait
-        // the remaining duration after subtracting time already spent on
-        // the read+send. This prevents burst-drain-starve buffer oscillation.
-        TickType_t target_ticks = pdMS_TO_TICKS((bytes_read * 1000) / byte_rate);
-        if (target_ticks < 1) target_ticks = 1;
-        TickType_t elapsed_ticks = xTaskGetTickCount() - iter_start;
-        if (elapsed_ticks < target_ticks)
-        {
-            vTaskDelay(target_ticks - elapsed_ticks);
-        }
+        // // Pace sends to match audio production rate.
+        // // Calculate how long this chunk represents in real-time, then wait
+        // // the remaining duration after subtracting time already spent on
+        // // the read+send. This prevents burst-drain-starve buffer oscillation.
+        // TickType_t target_ticks = pdMS_TO_TICKS((bytes_read * 1000) / byte_rate);
+        // if (target_ticks < 1) target_ticks = 1;
+        // TickType_t elapsed_ticks = xTaskGetTickCount() - iter_start;
+        // if (elapsed_ticks < target_ticks)
+        // {
+        //     vTaskDelay(target_ticks - elapsed_ticks);
+        // }
     }
 
     // Clean up client connection
