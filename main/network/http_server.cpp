@@ -21,6 +21,12 @@ static httpd_handle_t server = nullptr;
 static ClientConnection clients[ClientConnection::MAX_CLIENTS];
 static uint32_t current_sample_rate = 48000;
 
+// Context for async streaming task
+struct StreamTaskContext {
+    httpd_req_t *req;
+    int client_id;
+};
+
 // Initialize client slots
 static void init_client_slots()
 {
@@ -47,7 +53,111 @@ static int find_free_slot()
     return -1; // No free slot
 }
 
-// Stream handler for /stream endpoint
+// Async streaming task - runs independently from HTTP worker thread
+static void stream_task(void *arg)
+{
+    StreamTaskContext *ctx = (StreamTaskContext *)arg;
+    httpd_req_t *req = ctx->req;
+    int client_id = ctx->client_id;
+    
+    ESP_LOGI(TAG, "Stream task started for client %d", client_id);
+
+    // Chunk aligned to DMA production unit (240 frames × 6 bytes = 5ms at 48kHz)
+    uint8_t audio_chunk[1440];
+    size_t bytes_read;
+    uint32_t last_log_time = esp_timer_get_time() / 1000000;
+    uint32_t period_bytes = 0;
+    uint32_t empty_waits = 0;
+
+    // Pacing: match send rate to audio production rate
+    uint32_t byte_rate = current_sample_rate * 6; // sample_rate × 2ch × 3bytes
+
+    while (clients[client_id].is_active)
+    {
+        TickType_t iter_start = xTaskGetTickCount();
+
+        // Read from ring buffer
+        if (!AudioBuffer::read(client_id, audio_chunk, sizeof(audio_chunk), &bytes_read))
+        {
+            ESP_LOGE(TAG, "Ring buffer read error for client %d", client_id);
+            break;
+        }
+
+        if (bytes_read == 0)
+        {
+            // No data - wait for capture to produce more (do NOT send silence)
+            empty_waits++;
+            if (empty_waits == 500)
+            {
+                ESP_LOGW(TAG, "Client %d: buffer starved for %u waits", client_id, empty_waits);
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
+        }
+
+        empty_waits = 0;
+
+        // Send audio chunk
+        if (httpd_resp_send_chunk(req, (const char *)audio_chunk, bytes_read) != ESP_OK)
+        {
+            ESP_LOGI(TAG, "Client %d disconnected", client_id);
+            break;
+        }
+
+        clients[client_id].bytes_sent += bytes_read;
+        period_bytes += bytes_read;
+
+        // Log throughput every 10 seconds
+        uint32_t now = esp_timer_get_time() / 1000000;
+        uint32_t elapsed = now - last_log_time;
+        if (elapsed >= 10)
+        {
+            uint32_t kbps = (period_bytes * 8) / (elapsed * 1000);
+            ESP_LOGI(TAG, "Client %d: %u kbps (target: 2304), total %llu bytes",
+                     client_id, kbps, clients[client_id].bytes_sent);
+            period_bytes = 0;
+            last_log_time = now;
+        }
+
+        // Check if audio capture is still running
+        if (!AudioCapture::is_running())
+        {
+            ESP_LOGW(TAG, "Audio capture stopped, ending stream");
+            break;
+        }
+
+        // Pace sends to match audio production rate.
+        // Calculate how long this chunk represents in real-time, then wait
+        // the remaining duration after subtracting time already spent on
+        // the read+send. This prevents burst-drain-starve buffer oscillation.
+        TickType_t target_ticks = pdMS_TO_TICKS((bytes_read * 1000) / byte_rate);
+        if (target_ticks < 1) target_ticks = 1;
+        TickType_t elapsed_ticks = xTaskGetTickCount() - iter_start;
+        if (elapsed_ticks < target_ticks)
+        {
+            vTaskDelay(target_ticks - elapsed_ticks);
+        }
+    }
+
+    // Clean up client connection
+    ESP_LOGI(TAG, "Client %d disconnecting (sent %llu bytes)",
+             client_id, clients[client_id].bytes_sent);
+
+    AudioBuffer::unregister_client(client_id);
+    clients[client_id].is_active = false;
+    clients[client_id].socket_fd = -1;
+
+    // Send empty chunk to signal end of stream
+    httpd_resp_send_chunk(req, nullptr, 0);
+    
+    // Mark async request complete and free resources
+    httpd_req_async_handler_complete(req);
+    
+    free(ctx);
+    vTaskDelete(NULL);
+}
+
+// Stream handler for /stream endpoint - returns immediately using async pattern
 static esp_err_t stream_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "New stream request from client");
@@ -81,11 +191,9 @@ static esp_err_t stream_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Client %d connected (socket fd: %d)", client_id, clients[client_id].socket_fd);
 
     // Set TCP_NODELAY on streaming socket for lower latency
-    {
-        int fd = httpd_req_to_sockfd(req);
-        int nodelay = 1;
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-    }
+    int fd = httpd_req_to_sockfd(req);
+    int nodelay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
     // Build and send WAV header
     WavHeader wav_header;
@@ -100,85 +208,71 @@ static esp_err_t stream_handler(httpd_req_t *req)
     if (httpd_resp_send_chunk(req, (const char *)&wav_header, sizeof(WavHeader)) != ESP_OK)
     {
         ESP_LOGE(TAG, "Failed to send WAV header to client %d", client_id);
-        goto cleanup;
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
     }
 
     clients[client_id].bytes_sent += sizeof(WavHeader);
 
-    // Stream audio data in chunks
+    // Create async request copy for background streaming
+    httpd_req_t *async_req = nullptr;
+    esp_err_t err = httpd_req_async_handler_begin(req, &async_req);
+    if (err != ESP_OK)
     {
-        uint8_t audio_chunk[4320]; // 720 frames × 6 bytes (15ms of audio)
-        size_t bytes_read;
-        uint32_t last_log_time = esp_timer_get_time() / 1000000;
-        uint32_t period_bytes = 0;
-        uint32_t empty_waits = 0;
+        ESP_LOGE(TAG, "Failed to create async handler for client %d: %d", client_id, err);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
 
-        while (clients[client_id].is_active)
-        {
-            // Read from ring buffer
-            if (!AudioBuffer::read(client_id, audio_chunk, sizeof(audio_chunk), &bytes_read))
-            {
-                ESP_LOGE(TAG, "Ring buffer read error for client %d", client_id);
-                break;
-            }
+    // Allocate context for streaming task
+    StreamTaskContext *ctx = (StreamTaskContext *)malloc(sizeof(StreamTaskContext));
+    if (ctx == nullptr)
+    {
+        ESP_LOGE(TAG, "Failed to allocate context for client %d", client_id);
+        httpd_req_async_handler_complete(async_req);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
 
-            if (bytes_read == 0)
-            {
-                // No data - wait for capture to produce more (do NOT send silence)
-                empty_waits++;
-                if (empty_waits == 500)
-                {
-                    ESP_LOGW(TAG, "Client %d: buffer starved for %u waits", client_id, empty_waits);
-                }
-                vTaskDelay(pdMS_TO_TICKS(2));
-                continue;
-            }
+    ctx->req = async_req;
+    ctx->client_id = client_id;
 
-            empty_waits = 0;
+    // Spawn streaming task on Core 1 (network core)
+    char task_name[16];
+    snprintf(task_name, sizeof(task_name), "stream_%d", client_id);
+    BaseType_t result = xTaskCreatePinnedToCore(
+        stream_task,
+        task_name,
+        16384,          // Stack size (16KB for audio chunks)
+        ctx,
+        6,              // Priority (same as HTTP server)
+        nullptr,
+        1               // Core 1 (network core)
+    );
 
-            // Send audio chunk
-            if (httpd_resp_send_chunk(req, (const char *)audio_chunk, bytes_read) != ESP_OK)
-            {
-                ESP_LOGI(TAG, "Client %d disconnected", client_id);
-                break;
-            }
+    if (result != pdPASS)
+    {
+        ESP_LOGE(TAG, "Failed to create streaming task for client %d", client_id);
+        httpd_req_async_handler_complete(async_req);
+        free(ctx);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
 
-            clients[client_id].bytes_sent += bytes_read;
-            period_bytes += bytes_read;
-
-            // Log throughput every 10 seconds
-            uint32_t now = esp_timer_get_time() / 1000000;
-            uint32_t elapsed = now - last_log_time;
-            if (elapsed >= 10)
-            {
-                uint32_t kbps = (period_bytes * 8) / (elapsed * 1000);
-                ESP_LOGI(TAG, "Client %d: %u kbps (target: 2304), total %llu bytes",
-                         client_id, kbps, clients[client_id].bytes_sent);
-                period_bytes = 0;
-                last_log_time = now;
-            }
-
-            // Check if audio capture is still running
-            if (!AudioCapture::is_running())
-            {
-                ESP_LOGW(TAG, "Audio capture stopped, ending stream");
-                break;
-            }
-        }
-    } // End of streaming scope
-
-cleanup:
-    // Clean up client connection
-    ESP_LOGI(TAG, "Client %d disconnecting (sent %llu bytes)",
-             client_id, clients[client_id].bytes_sent);
-
-    AudioBuffer::unregister_client(client_id);
-    clients[client_id].is_active = false;
-    clients[client_id].socket_fd = -1;
-
-    // Send empty chunk to signal end of stream
-    httpd_resp_send_chunk(req, nullptr, 0);
-
+    // Return immediately - worker thread is now free for other requests
+    ESP_LOGI(TAG, "Stream handler returning, client %d now served by async task", client_id);
     return ESP_OK;
 }
 
