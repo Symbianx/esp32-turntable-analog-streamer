@@ -7,11 +7,17 @@
 
 static const char *TAG = "i2s_master";
 
-// GPIO pinout (from spec clarifications)
-constexpr gpio_num_t MCLK_GPIO = GPIO_NUM_0;   // SCK → PCM1808 SCKI
-constexpr gpio_num_t BCK_GPIO = GPIO_NUM_26;   // BCK → PCM1808 BCK
-constexpr gpio_num_t WS_GPIO = GPIO_NUM_25;    // LRCK → PCM1808 LRCK
-constexpr gpio_num_t DIN_GPIO = GPIO_NUM_27;   // DOUT ← PCM1808 DOUT
+// ESP32 wrover pinout
+// constexpr gpio_num_t MCLK_GPIO = GPIO_NUM_0;   // SCK → PCM1808 SCKI
+// constexpr gpio_num_t BCK_GPIO = GPIO_NUM_26;   // BCK → PCM1808 BCK
+// constexpr gpio_num_t WS_GPIO = GPIO_NUM_25;    // LRCK → PCM1808 LRCK
+// constexpr gpio_num_t DIN_GPIO = GPIO_NUM_27;   // DOUT ← PCM1808 DOUT
+
+// ESP32 s3 pinout
+constexpr gpio_num_t MCLK_GPIO = GPIO_NUM_9;   // SCK → PCM1808 SCKI
+constexpr gpio_num_t BCK_GPIO = GPIO_NUM_3;   // BCK → PCM1808 BCK
+constexpr gpio_num_t WS_GPIO = GPIO_NUM_8;    // LRCK → PCM1808 LRCK
+constexpr gpio_num_t DIN_GPIO = GPIO_NUM_46;   // DOUT ← PCM1808 DOUT
 
 // DMA configuration (must be multiples of 3 for 24-bit)
 constexpr uint32_t DMA_FRAME_NUM = 240;  // 240 frames per descriptor
@@ -62,7 +68,7 @@ bool I2SMaster::init(uint32_t sample_rate)
     std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
     
     // Use APLL for better clock accuracy (critical for 44.1kHz family)
-    std_cfg.clk_cfg.clk_src = I2S_CLK_SRC_APLL;
+    std_cfg.clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
     
     err = i2s_channel_init_std_mode(rx_handle, &std_cfg);
     if (err != ESP_OK) {
@@ -71,6 +77,10 @@ bool I2SMaster::init(uint32_t sample_rate)
         rx_handle = nullptr;
         return false;
     }
+    
+    // Verify GPIO configuration
+    ESP_LOGI(TAG, "I²S GPIO config: MCLK=GPIO%d, BCK=GPIO%d, WS=GPIO%d, DIN=GPIO%d",
+             MCLK_GPIO, BCK_GPIO, WS_GPIO, DIN_GPIO);
     
     ESP_LOGI(TAG, "I²S master initialized: %d Hz, 24-bit stereo, MCLK=%d MHz", 
              sample_rate, (sample_rate * 256) / 1000000);
@@ -142,7 +152,7 @@ bool I2SMaster::change_sample_rate(uint32_t new_sample_rate)
     // Reconfigure clock
     i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(new_sample_rate);
     clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_384;  // Must be multiple of 3 for 24-bit
-    clk_cfg.clk_src = I2S_CLK_SRC_APLL;
+    clk_cfg.clk_src = I2S_CLK_SRC_DEFAULT;
     
     esp_err_t err = i2s_channel_reconfig_std_clock(rx_handle, &clk_cfg);
     if (err != ESP_OK) {

@@ -93,8 +93,11 @@ static void audio_capture_task(void *params)
         read_count++;
         if (read_count == 1 || read_count % 5000 == 0) {
             // Log less frequently - every 25 seconds
-            ESP_LOGI(TAG, "Audio capture: %lu chunks, %llu frames. Sample: %02X %02X %02X",
+            // Show both raw DMA buffer and converted buffer for diagnostics
+            ESP_LOGI(TAG, "Audio capture: %lu chunks, %llu frames. Raw DMA: %02X %02X %02X %02X %02X %02X %02X %02X, Converted: %02X %02X %02X",
                      read_count, total_frames_captured.load(),
+                     dma_buffer[0], dma_buffer[1], dma_buffer[2], dma_buffer[3],
+                     dma_buffer[4], dma_buffer[5], dma_buffer[6], dma_buffer[7],
                      converted_buffer[0], converted_buffer[1], converted_buffer[2]);
         }
         
