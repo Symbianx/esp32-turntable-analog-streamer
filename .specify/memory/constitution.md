@@ -40,16 +40,18 @@ architecture and FreeRTOS must be leveraged to guarantee timing constraints.
 
 ### II. Audio Quality First
 
-Audio fidelity is the primary product quality metric. All design decisions MUST
-preserve signal integrity from ADC input to network output:
+
+Audio fidelity is the primary product quality metric. All design decisions MUST preserve signal integrity from ADC input to network output. When streaming, audio MAY be downsampled (bit depth reduced, e.g., 24→16 bit) for compatibility or performance, provided quality-preserving methods are used:
 
 - Sample depth MUST be ≥16-bit; prefer 24-bit or 32-bit floating-point where supported
+- Bit depth reduction (downsampling) MUST use dithering or high-quality truncation to minimize quantization artifacts
 - Sample rate MUST be ≥44.1kHz for music applications; 48kHz preferred
 - Signal chain MUST introduce <0.1% Total Harmonic Distortion (THD)
 - Dynamic range MUST be ≥90dB (SNR ≥90dB)
 - No lossy compression unless explicitly user-configurable with clear quality impact disclosure
 - Anti-aliasing filters MUST be applied before sample rate conversion
 - Dithering MUST be used when reducing bit depth
+
 
 **Rationale**: The purpose of this device is to digitize analog audio with transparency.
 Compromising audio quality defeats the product's value proposition. Users expect
@@ -172,3 +174,4 @@ This constitution supersedes all coding practices and design decisions. Amendmen
 - Constitution violations MUST be documented in commit messages and resolved before merge
 
 **Version**: 1.0.0 | **Ratified**: 2026-02-13 | **Last Amended**: 2026-02-13
+**Version**: 1.0.1 | **Ratified**: 2026-02-13 | **Last Amended**: 2026-02-22

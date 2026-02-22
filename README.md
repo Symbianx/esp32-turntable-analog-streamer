@@ -1,6 +1,6 @@
 # ESP32 PCM1808 Audio Streamer
 
-High-quality 24-bit audio streaming from turntables (or any analog source) over WiFi using ESP32-S3 and PCM1808 ADC.
+High-quality 16-bit audio streaming from turntables (or any analog source) over WiFi using ESP32-S3 and PCM1808 ADC.
 
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Platform](https://img.shields.io/badge/platform-ESP32--S3-blue)]()
@@ -47,19 +47,19 @@ High-quality 24-bit audio streaming from turntables (or any analog source) over 
 
 ### Audio ADC
 - **Chip**: Texas Instruments PCM1808
-- **Resolution**: 24-bit
+- **Resolution**: 16-bit
 - **Sample rates**: 8kHz - 96kHz
 - **Mode**: Slave (ESP32 provides all clocks)
-- **Format**: I²S Philips, 24-bit
+- **Format**: I²S Philips, 16-bit
 
 ### Connections
 
 | PCM1808 Pin | Function | ESP32 GPIO | Signal |
 |-------------|----------|-----------|--------|
-| SCKI (15) | System clock | GPIO0 | MCLK (12.288 MHz @ 48kHz) |
-| BCK (14) | Bit clock | GPIO26 | BCK |
-| LRCK (13) | Word select | GPIO25 | LRCK |
-| DOUT (12) | Audio data | GPIO27 | I²S RX |
+| SCKI (15) | System clock | GPIO9 | MCLK (12.288 MHz @ 48kHz) |
+| BCK (14) | Bit clock | GPIO3 | BCK |
+| LRCK (13) | Word select | GPIO85 | LRCK |
+| DOUT (12) | Audio data | GPIO46 | I²S RX |
 | MD0 (5) | Mode 0 | GND | Hardwired LOW |
 | MD1 (6) | Mode 1 | GND | Hardwired LOW |
 | FMT0 (7) | Format 0 | GND | Hardwired LOW |
@@ -68,8 +68,6 @@ High-quality 24-bit audio streaming from turntables (or any analog source) over 
 | VD (10) | Digital 3.3V | 3.3V | Power |
 | AGND (2,19) | Analog GND | GND | Ground |
 | DGND (9) | Digital GND | GND | Ground |
-
-**⚠️ Important**: GPIO0 is a boot strapping pin. Keep it floating during boot (no external pull-down). The I²S driver controls it after boot.
 
 ## Software Setup
 
@@ -87,43 +85,19 @@ git clone <repo-url>
 cd turntable-esp32-upnp-streamer
 ```
 
-2. **Configure WiFi credentials**:
-
-Create a `.env` file from the template:
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and set your WiFi credentials:
-```ini
-WIFI_SSID=YourNetworkName
-WIFI_PASSWORD=YourPassword123
-```
-
-**Note**: The `.env` file is gitignored and will not be committed to the repository.
-
-3. **Build**:
+2. **Build**:
 ```bash
 platformio run
 ```
 
-4. **Flash to ESP32**:
+3. **Flash to ESP32**:
 ```bash
 platformio run --target upload
 ```
 
-5. **Monitor serial output** (115200 baud):
+4. **Monitor serial output** (115200 baud):
 ```bash
 platformio device monitor
-```
-
-Expected output:
-```
-I (1234) main: PSRAM: 8388608 bytes (8.00 MB)
-I (1500) main: Phase 2 Complete: Audio pipeline running
-I (2000) main: IP Address: 192.168.1.42
-I (2001) main: Stream URL: http://192.168.1.42:8080/stream
-I (2002) main: Phase 3 Complete: HTTP streaming ready
 ```
 
 ## Usage
@@ -174,7 +148,7 @@ Also available as JSON: `curl -H "Accept: application/json" http://<esp32-ip>/st
 
 - **Container**: WAV (RIFF)
 - **Codec**: PCM (uncompressed)
-- **Bit depth**: 24-bit
+- **Bit depth**: 16-bit
 - **Sample rate**: 48000 Hz (default)
 - **Channels**: 2 (stereo)
 - **Byte rate**: 288 kB/s
@@ -207,7 +181,7 @@ Also available as JSON: `curl -H "Accept: application/json" http://<esp32-ip>/st
 ### Data Flow
 
 ```
-PCM1808 ADC → I²S (GPIO27) → DMA (Internal SRAM) → Ring Buffer (PSRAM)
+PCM1808 ADC → I²S (GPIO46) → DMA (Internal SRAM) → Ring Buffer (PSRAM)
                                                            ↓
                                                   HTTP Client 1 ← TCP/IP Stack
                                                   HTTP Client 2 ← (Core 1)
@@ -222,7 +196,7 @@ PCM1808 ADC → I²S (GPIO27) → DMA (Internal SRAM) → Ring Buffer (PSRAM)
 ```
 E (xxxx) i2s_master: Failed to initialize I²S channel
 ```
-→ Verify GPIO connections, especially GPIO0 (MCLK)
+→ Verify GPIO connections
 
 **Check WiFi connection**:
 ```
@@ -277,7 +251,7 @@ main/
 │   └── audio_capture.cpp    # DMA read, 32→24-bit conversion, clipping
 ├── network/        # Networking (Core 1)
 │   ├── wifi_manager.cpp     # WiFi STA/AP, auto-reconnect, scanning
-│   ├── http_server.cpp      # HTTP server, /stream.wav, /status
+│   ├── http_server.cpp      # HTTP server, /stream.wav, /status, downsampling to 16-bit
 │   ├── stream_handler.cpp   # WAV header builder
 │   └── config_portal.cpp    # Captive portal, WiFi config UI
 ├── storage/        # Configuration
@@ -308,7 +282,7 @@ main/
 This project follows a [design constitution](specs/001-pcm1808-http-streaming/plan.md#constitution-check) with 5 core principles:
 
 1. **Real-Time Performance**: No blocking in audio path
-2. **Audio Quality**: Preserve 24-bit resolution, <-85dB THD+N
+2. **Audio Quality**: Preserve 24-bit resolution until stream, <-85dB THD+N
 3. **Resource Efficiency**: No heap allocs in audio tasks
 4. **Deterministic Timing**: Lock-free data structures
 5. **Fail-Safe Operation**: Watchdogs, graceful degradation
