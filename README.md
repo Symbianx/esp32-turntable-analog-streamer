@@ -1,9 +1,9 @@
 # ESP32 PCM1808 Audio Streamer
 
-High-quality 24-bit audio streaming from turntables (or any analog source) over WiFi using ESP32-WROVER and PCM1808 ADC.
+High-quality 24-bit audio streaming from turntables (or any analog source) over WiFi using ESP32-S3 and PCM1808 ADC.
 
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Platform](https://img.shields.io/badge/platform-ESP32--WROVER-blue)]()
+[![Platform](https://img.shields.io/badge/platform-ESP32--S3-blue)]()
 [![Framework](https://img.shields.io/badge/framework-ESP--IDF%205.3-orange)]()
 
 ## Features
@@ -40,7 +40,7 @@ High-quality 24-bit audio streaming from turntables (or any analog source) over 
 ## Hardware Requirements
 
 ### ESP32 Module
-- **Board**: ESP32-DevKitC-WROVER
+- **Board**: ESP32-S3
 - **PSRAM**: 8MB (required for audio buffer)
 - **Flash**: 4MB minimum
 - **Cores**: Dual-core (Core 0: audio, Core 1: networking)
@@ -253,7 +253,7 @@ HTTP/1.1 503 Service Unavailable
 
 ## Performance
 
-**Measured on ESP32-WROVER @ 240MHz**:
+**Measured on ESP32-S3 @ 240MHz**:
 
 | Metric | Target | Actual |
 |--------|--------|--------|
@@ -320,10 +320,11 @@ This project follows a [design constitution](specs/001-pcm1808-http-streaming/pl
 - [ ] OTA firmware updates
 - [ ] Extended stress testing (4+ hours)
 
-## Known Limitations
+
+### Known Limitations
 
 - **GPIO0**: Boot strapping pin — do not add external pull-down. I²S MCLK output starts after boot.
-- **GPIO16/17**: Reserved for PSRAM on ESP32-WROVER modules — do not use for any other purpose.
+- **GPIO16/17**: Reserved for PSRAM on ESP32-S3 modules — do not use for any other purpose.
 - **Audio quality**: Signal integrity depends on wiring — use short connections or a PCB for best results. Breadboard + jumpers may cause flat/degraded audio.
 - **WiFi range**: Streaming requires sustained ~2.3 Mbps. Weak signal (below -75 dBm) may cause buffer underruns.
 - **mDNS**: Not yet implemented (ESP-IDF v5.3.4 mdns component compatibility issue).
