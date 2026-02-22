@@ -2,39 +2,18 @@
 
 High-quality 16-bit audio streaming from turntables (or any analog source) over WiFi using ESP32-S3 and PCM1808 ADC.
 
-[![Build](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Platform](https://img.shields.io/badge/platform-ESP32--S3-blue)]()
 [![Framework](https://img.shields.io/badge/framework-ESP--IDF%205.3-orange)]()
 
 ## Features
-
-✅ **Core Streaming** (Phase 3)
-- 24-bit stereo audio capture at 48kHz (44.1kHz/96kHz configurable)
-- HTTP streaming in uncompressed WAV format at `/stream.wav`
-- Lock-free ring buffer (1.1MB in PSRAM) for smooth playback
-- Supports up to 3 concurrent clients
+- 24-bit stereo audio capture (48kHz, configurable)
+- Downsampling to 16-bit WAV streaming over HTTP
+- Lock-free ring buffer for smooth playback
+- Up to 3 concurrent clients
 - WiFi STA mode with auto-reconnect
-- Real-time clipping detection
-- TCP_NODELAY + 16KB TCP buffers for reliable throughput
-
-✅ **WiFi Configuration Portal** (Phase 4)
-- Captive portal at 192.168.4.1 in AP mode
-- WiFi network scanning
-- Web-based credential and sample rate configuration
-- Automatic restart after configuration
-
-✅ **Status & Monitoring** (Phase 5)
-- Real-time status page at `/status` (HTML + JSON)
-- Audio metrics: buffer fill, underruns, overruns, clipping
-- System metrics: CPU usage per core, heap, uptime
-- Network: WiFi RSSI, connected clients, stream URL
-- Auto-refresh every 5 seconds
-- Content negotiation (Accept: application/json → JSON)
-- CORS headers for browser compatibility
-
-✅ **Polish** (Phase 6)
-- I²S failure detection with auto-reset recovery
-- GPIO0 boot strapping documentation
+- Captive portal for WiFi and sample rate setup
+- Real-time status and diagnostics page (HTML/JSON)
+- Clipping detection and recovery
 - Comprehensive serial logging
 
 ## Hardware Requirements
@@ -47,10 +26,10 @@ High-quality 16-bit audio streaming from turntables (or any analog source) over 
 
 ### Audio ADC
 - **Chip**: Texas Instruments PCM1808
-- **Resolution**: 16-bit
+- **Resolution**: 24-bit
 - **Sample rates**: 8kHz - 96kHz
 - **Mode**: Slave (ESP32 provides all clocks)
-- **Format**: I²S Philips, 16-bit
+- **Format**: I²S Philips, 24-bit
 
 ### Connections
 
@@ -188,105 +167,6 @@ PCM1808 ADC → I²S (GPIO46) → DMA (Internal SRAM) → Ring Buffer (PSRAM)
                                                   HTTP Client 3 ←
 ```
 
-## Troubleshooting
-
-### No Audio Output
-
-**Check serial log for errors**:
-```
-E (xxxx) i2s_master: Failed to initialize I²S channel
-```
-→ Verify GPIO connections
-
-**Check WiFi connection**:
-```
-E (xxxx) wifi_manager: Failed to connect to AP
-```
-→ Verify SSID/password, check WPA2-PSK support
-
-### Audio Clipping
-
-```
-W (xxxx) main: Audio: ... [CLIPPING]
-```
-→ Reduce analog input level to PCM1808 (target -6dB below max)
-
-### Buffer Underruns
-
-```
-W (xxxx) audio_capture: I²S read underrun
-```
-→ Increase `DMA_FRAME_NUM` in `audio/i2s_master.cpp` (must be multiple of 3)
-
-### HTTP 503 Errors
-
-```
-HTTP/1.1 503 Service Unavailable
-```
-→ Max 3 clients reached. Disconnect one client or wait 5 seconds.
-
-## Performance
-
-**Measured on ESP32-S3 @ 240MHz**:
-
-| Metric | Target | Actual |
-|--------|--------|--------|
-| Latency (analog → HTTP) | <100ms | ~85ms |
-| CPU Usage (Core 0) | <60% | ~45% |
-| CPU Usage (Core 1) | <70% | ~55% |
-| RAM Usage | <80% | 35.7 KB (10.9%) |
-| Flash Usage | <90% | 826 KB (52.5%) |
-| Buffer Underruns (4h test) | 0 | 0 |
-
-## Development
-
-### Project Structure
-
-```
-main/
-├── audio/          # Audio pipeline (Core 0)
-│   ├── i2s_master.cpp       # I²S driver (APLL, 256fs MCLK, 32-bit slots)
-│   ├── pcm1808_driver.cpp   # ADC initialization
-│   ├── audio_buffer.cpp     # Lock-free ring buffer (PSRAM, memcpy)
-│   └── audio_capture.cpp    # DMA read, 32→24-bit conversion, clipping
-├── network/        # Networking (Core 1)
-│   ├── wifi_manager.cpp     # WiFi STA/AP, auto-reconnect, scanning
-│   ├── http_server.cpp      # HTTP server, /stream.wav, /status, downsampling to 16-bit
-│   ├── stream_handler.cpp   # WAV header builder
-│   └── config_portal.cpp    # Captive portal, WiFi config UI
-├── storage/        # Configuration
-│   └── nvs_config.cpp       # NVS with CRC32 validation
-├── system/         # Infrastructure
-│   ├── task_manager.cpp     # FreeRTOS task creation, CPU tracking
-│   ├── watchdog.cpp         # 10s watchdog timer
-│   └── error_handler.cpp    # Error logging, counters
-└── config_schema.h # Data structures
-```
-
-### Build Configuration
-
-**platformio.ini**:
-- Platform: `espressif32`
-- Board: `esp-wrover-kit`
-- Framework: `espidf`
-
-**sdkconfig.defaults**:
-- PSRAM: 8MB, SPI @ 80MHz
-- WiFi: WPA2-PSK, 32 dynamic buffers
-- I²S: ISR IRAM-safe
-- Watchdog: 10s timeout
-- Compiler: `-O3` optimization
-
-### Constitution
-
-This project follows a [design constitution](specs/001-pcm1808-http-streaming/plan.md#constitution-check) with 5 core principles:
-
-1. **Real-Time Performance**: No blocking in audio path
-2. **Audio Quality**: Preserve 24-bit resolution until stream, <-85dB THD+N
-3. **Resource Efficiency**: No heap allocs in audio tasks
-4. **Deterministic Timing**: Lock-free data structures
-5. **Fail-Safe Operation**: Watchdogs, graceful degradation
-
 ## Roadmap
 
 - [ ] mDNS as `esp32-audio-stream.local`
@@ -294,27 +174,6 @@ This project follows a [design constitution](specs/001-pcm1808-http-streaming/pl
 - [ ] OTA firmware updates
 - [ ] Extended stress testing (4+ hours)
 
-
-### Known Limitations
-
-- **GPIO0**: Boot strapping pin — do not add external pull-down. I²S MCLK output starts after boot.
-- **GPIO16/17**: Reserved for PSRAM on ESP32-S3 modules — do not use for any other purpose.
-- **Audio quality**: Signal integrity depends on wiring — use short connections or a PCB for best results. Breadboard + jumpers may cause flat/degraded audio.
-- **WiFi range**: Streaming requires sustained ~2.3 Mbps. Weak signal (below -75 dBm) may cause buffer underruns.
-- **mDNS**: Not yet implemented (ESP-IDF v5.3.4 mdns component compatibility issue).
-
 ## License
 
 See [LICENSE](LICENSE) file.
-
-## Credits
-
-- **ESP-IDF**: Espressif IoT Development Framework
-- **PCM1808**: Texas Instruments 24-bit ADC
-- **Speckit**: Feature specification and task generation
-
----
-
-**Status**: All user stories complete (Phases 1-6)  
-**Last Updated**: 2026-02-14  
-**Firmware Version**: 1.0.0
