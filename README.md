@@ -170,9 +170,8 @@ PCM1808 ADC → I²S (GPIO46) → DMA (Internal SRAM) → Ring Buffer (PSRAM)
 ## Roadmap
 
 - [ ] mDNS as `esp32-audio-stream.local`
-- [ ] Sample rate switching via HTTP API
 - [ ] OTA firmware updates
-- [ ] Extended stress testing (4+ hours)
+- [ ] Equalization
 
 ## License
 
