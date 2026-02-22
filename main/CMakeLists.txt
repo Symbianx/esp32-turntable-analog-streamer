@@ -13,6 +13,7 @@ idf_component_register(
         "system/task_manager.cpp"
         "system/watchdog.cpp"
         "system/error_handler.cpp"
+        "system/rgb_led.cpp"
     INCLUDE_DIRS
         "."
 )

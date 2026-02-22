@@ -81,6 +81,29 @@ platformio device monitor
 
 ## Usage
 
+### Debugging Initialization with RGB LED
+
+If you have no access to the serial port, you can follow the progress of device initialization using the onboard RGB LED (Neopixel):
+
+| Step                | LED Color         | RGB Value      |
+|---------------------|------------------|---------------|
+| NVS Init            | Blue             | (0, 0, 32)    |
+| WiFi Init           | Cyan             | (0, 32, 32)   |
+| Config Portal       | Yellow           | (32, 32, 0)   |
+| HTTP Server         | Magenta          | (32, 0, 32)   |
+| Audio Buffer        | Orange           | (32, 16, 0)   |
+| I²S Init            | Purple           | (16, 0, 32)   |
+| Audio Capture       | White            | (32, 32, 32)  |
+| Success             | Green            | (0, 32, 0)    |
+| Error               | Flashing Red     | (32, 0, 0)    |
+
+**How it works:**
+- The LED changes color at the start of each initialization step.
+- If a step fails, the LED flashes red and stays red.
+- If all steps succeed, the LED turns green.
+
+This allows you to visually debug where the device gets stuck during boot.
+
 ### First-Time Setup
 
 1. **Flash firmware** and power on the ESP32
