@@ -93,6 +93,8 @@ extern "C" void app_main() {
     // At this point we're connected to WiFi - initialize services
     ESP_LOGI(TAG, "WiFi connected, starting services...");
     
+    // mDNS initialization skipped (not supported in this build)
+    
     // Load sample rate from config
     DeviceConfig loaded_config;
     uint32_t sample_rate = 48000;  // Default

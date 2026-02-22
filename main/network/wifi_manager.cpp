@@ -5,7 +5,7 @@
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "freertos/event_groups.h"
-// #include "mdns.h" // Phase 4 TODO: Use esp_netif mDNS
+#include "mdns.h"
 #include "esp_mac.h"
 #include <cstring>
 
@@ -409,12 +409,52 @@ int WiFiManager::scan_networks(WiFiScanResult* results, int max_results)
 // Phase 4: mDNS service (T034)
 bool WiFiManager::start_mdns(const char* hostname, uint16_t http_port)
 {
-    // TODO Phase 4: Implement mDNS using esp_netif or lwIP
-    ESP_LOGW("wifi_manager", "mDNS not yet implemented");
+    if (mdns_initialized) {
+        ESP_LOGW(TAG, "mDNS already initialized");
+        return true;
+    }
+    
+    // Initialize mDNS
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS init failed: %d", err);
+        return false;
+    }
+    
+    // Set hostname
+    err = mdns_hostname_set(hostname);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set mDNS hostname: %d", err);
+        mdns_free();
+        return false;
+    }
+    
+    // Set instance name
+    err = mdns_instance_name_set("ESP32 Audio Streamer");
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set mDNS instance name: %d", err);
+        mdns_free();
+        return false;
+    }
+    
+    // Add HTTP service
+    err = mdns_service_add(nullptr, "_http", "_tcp", http_port, nullptr, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add mDNS HTTP service: %d", err);
+        mdns_free();
+        return false;
+    }
+    
+    mdns_initialized = true;
+    ESP_LOGI(TAG, "mDNS initialized: %s.local:%d", hostname, http_port);
     return true;
 }
 
 void WiFiManager::stop_mdns()
 {
-    // TODO Phase 4: Implement mDNS cleanup
+    if (mdns_initialized) {
+        mdns_free();
+        mdns_initialized = false;
+        ESP_LOGI(TAG, "mDNS stopped");
+    }
 }

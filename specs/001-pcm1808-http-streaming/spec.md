@@ -87,6 +87,7 @@ A user wants to verify audio quality and system health. They navigate to a diagn
 - **FR-001**: System MUST capture stereo audio from PCM1808 ADC via I²S interface with ESP32 as I²S master
 - **FR-002**: System MUST support three sample rates: 44.1kHz, 48kHz, and 96kHz (user-selectable, default 48kHz)
 - **FR-003**: System MUST capture audio at 24-bit resolution (PCM1808 native bit depth)
+- **FR-003a**: System MUST downsample captured 24-bit audio to 16-bit PCM for HTTP streaming, using seamless and high-quality conversion (e.g., truncation or dithering)
 - **FR-004**: System MUST configure PCM1808 in slave mode with ESP32 providing BCK (bit clock) and LRCK (word clock)
 - **FR-005**: System MUST generate system clock (SCK) for PCM1808 at 256×fs (e.g., 12.288MHz for 48kHz sampling)
 - **FR-006**: System MUST use I²S data format (PCM1808 supports 24-bit I²S and left-justified; I²S selected for compatibility)
@@ -150,7 +151,7 @@ A user wants to verify audio quality and system health. They navigate to a diagn
 
 ### Key Entities
 
-- **Audio Stream**: Represents the real-time PCM audio data flowing from ADC → ESP32 → HTTP clients. Attributes: sample rate (44.1/48/96kHz), bit depth (24-bit), format (stereo), buffer size (samples), fill level (%).
+- **Audio Stream**: Represents the real-time PCM audio data flowing from ADC → ESP32 → HTTP clients. Attributes: sample rate (44.1/48/96kHz), input bit depth (24-bit), output bit depth (16-bit, downsampled), format (stereo), buffer size (samples), fill level (%).
 - **Device Configuration**: Represents stored settings for WiFi (SSID, password, IP mode), Audio (sample rate, bit depth), Network (HTTP port, max clients), System (device name, mDNS name). Persisted in NVS with CRC32 checksum.
 - **Client Connection**: Represents an active HTTP streaming client. Attributes: IP address, connection time, bytes sent, buffer underrun count, disconnect reason. Maximum 3 concurrent connections.
 - **System Metrics**: Represents real-time health data. Attributes: CPU usage (%), heap free (bytes), WiFi RSSI (dBm), buffer fill (%), I²S error count, uptime (seconds), THD+N estimate (dB).
@@ -168,9 +169,9 @@ A user wants to verify audio quality and system health. They navigate to a diagn
 
 #### Audio Quality Metrics
 
-- **SC-001**: Measured THD+N is below -90dB when streaming a 1kHz sine wave at -20dBFS input level
-- **SC-002**: Measured SNR is at least 95dB with silence (no signal) at the RCA input
-- **SC-003**: Frequency response is ±1dB from 20Hz to 20kHz when measured with swept sine wave input
+- **SC-001**: Measured THD+N is below -90dB when streaming a 1kHz sine wave at -20dBFS input level (after 24→16 bit downsampling)
+- **SC-002**: Measured SNR is at least 95dB with silence (no signal) at the RCA input (after 24→16 bit downsampling)
+- **SC-003**: Frequency response is ±1dB from 20Hz to 20kHz when measured with swept sine wave input (after 24→16 bit downsampling)
 - **SC-004**: Stereo channel separation is at least 85dB (left channel signal does not leak into right channel above -85dB)
 - **SC-005**: No audible artifacts (clicks, pops, dropouts) during 45-minute vinyl album playback as verified by listening test
 

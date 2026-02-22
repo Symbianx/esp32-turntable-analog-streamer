@@ -63,21 +63,22 @@ static void stream_task(void *arg)
     ESP_LOGI(TAG, "Stream task started for client %d", client_id);
 
     // Chunk aligned to DMA production unit (240 frames × 6 bytes = 5ms at 48kHz)
-    uint8_t audio_chunk[1440];
+    uint8_t audio_chunk_24bit[1440];  // 24-bit input from ring buffer
+    uint8_t audio_chunk_16bit[960];   // 16-bit output for HTTP stream (1440 * 2/3)
     size_t bytes_read;
     uint32_t last_log_time = esp_timer_get_time() / 1000000;
     uint32_t period_bytes = 0;
     uint32_t empty_waits = 0;
 
-    // Pacing: match send rate to audio production rate
-    uint32_t byte_rate = current_sample_rate * 6; // sample_rate × 2ch × 3bytes
+    // Pacing: match send rate to audio production rate (16-bit output)
+    uint32_t byte_rate = current_sample_rate * 4; // sample_rate × 2ch × 2bytes (16-bit)
 
     while (clients[client_id].is_active)
     {
         TickType_t iter_start = xTaskGetTickCount();
 
-        // Read from ring buffer
-        if (!AudioBuffer::read(client_id, audio_chunk, sizeof(audio_chunk), &bytes_read))
+        // Read from ring buffer (24-bit data)
+        if (!AudioBuffer::read(client_id, audio_chunk_24bit, sizeof(audio_chunk_24bit), &bytes_read))
         {
             ESP_LOGE(TAG, "Ring buffer read error for client %d", client_id);
             break;
@@ -97,15 +98,23 @@ static void stream_task(void *arg)
 
         empty_waits = 0;
 
-        // Send audio chunk
-        if (httpd_resp_send_chunk(req, (const char *)audio_chunk, bytes_read) != ESP_OK)
+        // Downsample 24-bit to 16-bit
+        size_t bytes_16bit = StreamHandler::downsample_24to16(audio_chunk_24bit, audio_chunk_16bit, bytes_read);
+        if (bytes_16bit == 0)
+        {
+            ESP_LOGE(TAG, "Downsampling failed for client %d", client_id);
+            break;
+        }
+
+        // Send 16-bit audio chunk
+        if (httpd_resp_send_chunk(req, (const char *)audio_chunk_16bit, bytes_16bit) != ESP_OK)
         {
             ESP_LOGI(TAG, "Client %d disconnected", client_id);
             break;
         }
 
-        clients[client_id].bytes_sent += bytes_read;
-        period_bytes += bytes_read;
+        clients[client_id].bytes_sent += bytes_16bit;
+        period_bytes += bytes_16bit;
 
         // Log throughput every 10 seconds
         uint32_t now = esp_timer_get_time() / 1000000;
@@ -113,8 +122,9 @@ static void stream_task(void *arg)
         if (elapsed >= 10)
         {
             uint32_t kbps = (period_bytes * 8) / (elapsed * 1000);
-            ESP_LOGI(TAG, "Client %d: %u kbps (target: 2304), total %llu bytes",
-                     client_id, kbps, clients[client_id].bytes_sent);
+            uint32_t target_kbps = (current_sample_rate * 4 * 8) / 1000;  // 16-bit stereo bitrate
+            ESP_LOGI(TAG, "Client %d: %u kbps (target: %u), total %llu bytes",
+                     client_id, kbps, target_kbps, clients[client_id].bytes_sent);
             period_bytes = 0;
             last_log_time = now;
         }
