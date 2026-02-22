@@ -1,4 +1,4 @@
-# turntable-esp32-upnp-streamer Development Guidelines
+# esp32-turntable-analog-streamer Development Guidelines
 
 Auto-generated from all feature plans. Last updated: 2026-02-13
 

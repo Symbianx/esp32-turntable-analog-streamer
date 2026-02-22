@@ -7,7 +7,7 @@ info:
     Runs on the ESP32 using esp_http_server.
   version: "1.0.0"
   contact:
-    name: turntable-esp32-upnp-streamer
+    name: esp32-turntable-analog-streamer
   x-security-note: |
     No authentication is required for any endpoint. The device operates on a
     trusted local network (WPA2-PSK secured WiFi). All endpoints are open access.

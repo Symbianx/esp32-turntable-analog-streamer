@@ -82,7 +82,7 @@ High-quality 16-bit audio streaming from turntables (or any analog source) over 
 1. **Clone repository**:
 ```bash
 git clone <repo-url>
-cd turntable-esp32-upnp-streamer
+cd esp32-turntable-analog-streamer
 ```
 
 2. **Build**:

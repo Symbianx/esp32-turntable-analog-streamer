@@ -43,7 +43,7 @@
 ### 1. Clone and Enter Project
 
 ```bash
-cd turntable-esp32-upnp-streamer
+cd esp32-turntable-analog-streamer
 ```
 
 ### 2. Build Firmware
