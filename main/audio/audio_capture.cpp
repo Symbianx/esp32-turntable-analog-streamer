@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <atomic>
+#include <cmath>
 
 static const char *TAG = "audio_capture";
 
@@ -21,6 +22,13 @@ static std::atomic<bool> capture_running{false};
 static std::atomic<uint64_t> total_frames_captured{0};
 static std::atomic<uint32_t> underrun_count{0};
 static std::atomic<bool> clipping_detected{false};
+
+// Playback detection state (T007)
+static std::atomic<bool> playback_status{false};
+static float audio_threshold_linear = 838.0f;  // Default: -40dB for 24-bit
+static float rms_accumulator = 0.0f;
+constexpr float RMS_ALPHA = 0.05f;  // Exponential moving average factor
+constexpr int32_t MAX_24BIT = 8388608;  // 2^23
 
 // Clipping detection parameters
 constexpr int32_t CLIP_THRESHOLD = 8388000;  // ~99.9% of 24-bit range (8388608)
@@ -129,6 +137,60 @@ static void audio_capture_task(void *params)
             }
         }
         
+        // RMS calculation with subsampling for playback detection (T008)
+        int64_t sum_squares = 0;
+        for (size_t i = 0; i < frames; i += 8) {  // Sample every 8th frame
+            if (i * 6 + 2 >= converted_size) break;
+            
+            // Extract 24-bit signed sample (left channel)
+            int32_t sample = (int32_t)(converted_buffer[i*6 + 0] |
+                                       (converted_buffer[i*6 + 1] << 8) |
+                                       (converted_buffer[i*6 + 2] << 16));
+            if (sample & 0x800000) sample |= 0xFF000000;  // Sign extend
+            
+            sum_squares += (int64_t)sample * sample;
+        }
+        
+        // Calculate RMS for this chunk
+        size_t sampled_count = (frames + 7) / 8;  // Ceiling division
+        if (sampled_count > 0) {
+            float chunk_rms = sqrtf((float)sum_squares / sampled_count);
+            
+            // Exponential moving average (debounce)
+            rms_accumulator = (RMS_ALPHA * chunk_rms) + ((1.0f - RMS_ALPHA) * rms_accumulator);
+            
+            // Threshold comparison (T009)
+            bool is_playing = (rms_accumulator > audio_threshold_linear);
+            
+            // Update atomic flag (lock-free)
+            bool prev_status = playback_status.load(std::memory_order_relaxed);
+            if (is_playing != prev_status) {
+                // State change - apply debounce (T010)
+                static uint32_t state_change_counter = 0;
+                static bool pending_state = false;
+                
+                if (pending_state != is_playing) {
+                    // New state different from pending - reset counter
+                    pending_state = is_playing;
+                    state_change_counter = 0;
+                }
+                
+                state_change_counter++;
+                
+                // Debounce: 200ms for idle->playing, 500ms for playing->idle
+                // At 240 frames per chunk, 48kHz: ~5ms per chunk
+                // 200ms ≈ 40 chunks, 500ms ≈ 100 chunks
+                uint32_t debounce_threshold = is_playing ? 40 : 100;
+                
+                if (state_change_counter >= debounce_threshold) {
+                    playback_status.store(is_playing, std::memory_order_release);
+                    state_change_counter = 0;
+                    ESP_LOGI(TAG, "Playback status changed: %s (RMS: %.1f, threshold: %.1f)",
+                             is_playing ? "PLAYING" : "IDLE", rms_accumulator, audio_threshold_linear);
+                }
+            }
+        }
+        
         // Update frame counter
         total_frames_captured.fetch_add(frames, std::memory_order_release);
     }
@@ -213,4 +275,27 @@ bool AudioCapture::is_clipping()
 bool AudioCapture::is_running()
 {
     return capture_running.load(std::memory_order_acquire);
+}
+
+bool AudioCapture::is_playing()
+{
+    return playback_status.load(std::memory_order_acquire);
+}
+
+void AudioCapture::set_threshold_db(float threshold_db)
+{
+    // Convert dB to linear amplitude for 24-bit audio
+    // linear = 2^23 * 10^(dB/20)
+    audio_threshold_linear = MAX_24BIT * powf(10.0f, threshold_db / 20.0f);
+    ESP_LOGI(TAG, "Audio threshold set to %.1f dB (linear: %.1f)", threshold_db, audio_threshold_linear);
+}
+
+float AudioCapture::get_current_rms_db()
+{
+    // Convert current RMS to dB
+    // dB = 20 * log10(rms / 2^23)
+    if (rms_accumulator < 1.0f) {
+        return -100.0f;  // Silence
+    }
+    return 20.0f * log10f(rms_accumulator / MAX_24BIT);
 }

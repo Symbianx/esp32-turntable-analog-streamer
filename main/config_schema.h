@@ -13,12 +13,24 @@ struct DeviceConfig {
     char device_name[33];         // mDNS hostname and AP name
     uint16_t http_port;           // HTTP server listen port (1024-65535)
     uint8_t max_clients;          // Max concurrent streaming clients (1-5)
+    
+    // MQTT Configuration
+    bool mqtt_enabled;            // Enable MQTT integration
+    char mqtt_broker[128];        // MQTT broker hostname or IP
+    uint16_t mqtt_port;           // MQTT broker port (default: 1883)
+    char mqtt_username[64];       // MQTT username (optional)
+    char mqtt_password[64];       // MQTT password (optional)
+    bool mqtt_use_tls;            // Enable TLS/SSL
+    float audio_threshold_db;     // Audio detection threshold in dBFS (-60 to -20)
+    
     uint32_t crc32;               // Integrity checksum
 
     static constexpr uint32_t DEFAULT_SAMPLE_RATE = 48000;
     static constexpr uint16_t DEFAULT_HTTP_PORT = 8080;
     static constexpr uint8_t DEFAULT_MAX_CLIENTS = 3;
     static constexpr const char* DEFAULT_DEVICE_NAME = "ESP32-Audio-Stream";
+    static constexpr uint16_t DEFAULT_MQTT_PORT = 1883;
+    static constexpr float DEFAULT_AUDIO_THRESHOLD_DB = -40.0f;
 } __attribute__((packed));
 
 // AudioStream: Real-time audio data pipeline state
@@ -93,5 +105,27 @@ struct WavHeader {
 
     static constexpr size_t SIZE = 44;
 } __attribute__((packed));
+
+// NVS Key Constants
+namespace NVSKeys {
+    // WiFi Configuration
+    constexpr const char* WIFI_SSID = "wifi_ssid";
+    constexpr const char* WIFI_PASSWORD = "wifi_pass";
+    
+    // Audio Configuration
+    constexpr const char* SAMPLE_RATE = "sample_rate";
+    constexpr const char* DEVICE_NAME = "device_name";
+    constexpr const char* HTTP_PORT = "http_port";
+    constexpr const char* MAX_CLIENTS = "max_clients";
+    
+    // MQTT Configuration
+    constexpr const char* MQTT_ENABLED = "mqtt_enabled";
+    constexpr const char* MQTT_BROKER = "mqtt_broker";
+    constexpr const char* MQTT_PORT = "mqtt_port";
+    constexpr const char* MQTT_USERNAME = "mqtt_user";
+    constexpr const char* MQTT_PASSWORD = "mqtt_pass";
+    constexpr const char* MQTT_USE_TLS = "mqtt_tls";
+    constexpr const char* AUDIO_THRESHOLD_DB = "audio_thresh";
+}
 
 #endif // CONFIG_SCHEMA_H
