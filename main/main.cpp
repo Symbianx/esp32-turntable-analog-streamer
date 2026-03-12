@@ -9,6 +9,7 @@
 #include "network/wifi_manager.h"
 #include "network/config_portal.h"
 #include "network/http_server.h"
+#include "network/mqtt_client.h"
 #include "storage/nvs_config.h"
 #include "config_schema.h"
 #include "system/rgb_led.h"
@@ -133,6 +134,28 @@ static bool init() {
         return false;
     }
     ESP_LOGI(TAG, "Audio capture task started");
+    
+    // Step: Load audio threshold from config
+    if (has_config) {
+        AudioCapture::set_threshold_db(loaded_config.audio_threshold_db);
+        ESP_LOGI(TAG, "Audio threshold set to %.1f dB", loaded_config.audio_threshold_db);
+    }
+    
+    // Step: MQTT Client (optional - only if enabled in config)
+    if (has_config && loaded_config.mqtt_enabled) {
+        ESP_LOGI(TAG, "Initializing MQTT client...");
+        if (MQTTClient::init()) {
+            if (MQTTClient::start()) {
+                ESP_LOGI(TAG, "MQTT client started");
+            } else {
+                ESP_LOGW(TAG, "MQTT client failed to start: %s", MQTTClient::get_last_error());
+            }
+        } else {
+            ESP_LOGW(TAG, "MQTT client initialization failed: %s", MQTTClient::get_last_error());
+        }
+    } else {
+        ESP_LOGI(TAG, "MQTT disabled or not configured");
+    }
 
     char ip[16];
     WiFiManager::get_ip_address(ip, sizeof(ip));

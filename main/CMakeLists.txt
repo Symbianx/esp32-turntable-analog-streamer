@@ -9,6 +9,7 @@ idf_component_register(
         "network/config_portal.cpp"
         "network/http_server.cpp"
         "network/stream_handler.cpp"
+        "network/mqtt_client.cpp"
         "storage/nvs_config.cpp"
         "system/task_manager.cpp"
         "system/watchdog.cpp"
