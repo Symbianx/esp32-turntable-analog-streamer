@@ -14,10 +14,10 @@ static const char *TAG = "i2s_master";
 // constexpr gpio_num_t DIN_GPIO = GPIO_NUM_27;   // DOUT ← PCM1808 DOUT
 
 // ESP32 s3 pinout
-constexpr gpio_num_t MCLK_GPIO = GPIO_NUM_9;   // SCK → PCM1808 SCKI
-constexpr gpio_num_t BCK_GPIO = GPIO_NUM_3;   // BCK → PCM1808 BCK
-constexpr gpio_num_t WS_GPIO = GPIO_NUM_8;    // LRCK → PCM1808 LRCK
-constexpr gpio_num_t DIN_GPIO = GPIO_NUM_46;   // DOUT ← PCM1808 DOUT
+constexpr gpio_num_t MCLK_GPIO = GPIO_NUM_8;   // SCK → PCM1808 SCKI
+constexpr gpio_num_t BCK_GPIO = GPIO_NUM_16;   // BCK → PCM1808 BCK
+constexpr gpio_num_t WS_GPIO = GPIO_NUM_18;    // LRCK → PCM1808 LRCK
+constexpr gpio_num_t DIN_GPIO = GPIO_NUM_17;   // DOUT ← PCM1808 DOUT
 
 // DMA configuration (must be multiples of 3 for 24-bit)
 constexpr uint32_t DMA_FRAME_NUM = 240;  // 240 frames per descriptor
