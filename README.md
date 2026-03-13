@@ -35,10 +35,10 @@ High-quality 16-bit audio streaming from turntables (or any analog source) over 
 
 | PCM1808 Pin | Function | ESP32 GPIO | Signal |
 |-------------|----------|-----------|--------|
-| SCKI (15) | System clock | GPIO9 | MCLK (12.288 MHz @ 48kHz) |
-| BCK (14) | Bit clock | GPIO3 | BCK |
-| LRCK (13) | Word select | GPIO85 | LRCK |
-| DOUT (12) | Audio data | GPIO46 | I²S RX |
+| SCKI (15) | System clock | GPIO8 | MCLK (12.288 MHz @ 48kHz) |
+| BCK (14) | Bit clock | GPIO16 | BCK |
+| LRCK (13) | Word select | GPIO18 | LRCK |
+| DOUT (12) | Audio data | GPIO17 | I²S RX |
 | MD0 (5) | Mode 0 | GND | Hardwired LOW |
 | MD1 (6) | Mode 1 | GND | Hardwired LOW |
 | FMT0 (7) | Format 0 | GND | Hardwired LOW |
