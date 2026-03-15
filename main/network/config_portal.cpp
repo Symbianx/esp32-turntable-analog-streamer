@@ -269,7 +269,10 @@ bool ConfigPortal::init(httpd_handle_t server)
         .handler = root_handler,
         .user_ctx = nullptr
     };
-    httpd_register_uri_handler(server, &root_uri);
+    if (httpd_register_uri_handler(server, &root_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register route GET /");
+        return false;
+    }
     
     // GET /wifi/scan
     httpd_uri_t scan_uri = {
@@ -278,7 +281,10 @@ bool ConfigPortal::init(httpd_handle_t server)
         .handler = wifi_scan_handler,
         .user_ctx = nullptr
     };
-    httpd_register_uri_handler(server, &scan_uri);
+    if (httpd_register_uri_handler(server, &scan_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register route GET /wifi/scan");
+        return false;
+    }
     
     // GET /config
     httpd_uri_t get_config_uri = {
@@ -287,7 +293,10 @@ bool ConfigPortal::init(httpd_handle_t server)
         .handler = get_config_handler,
         .user_ctx = nullptr
     };
-    httpd_register_uri_handler(server, &get_config_uri);
+    if (httpd_register_uri_handler(server, &get_config_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register route GET /config");
+        return false;
+    }
     
     // POST /config
     httpd_uri_t post_config_uri = {
@@ -296,7 +305,10 @@ bool ConfigPortal::init(httpd_handle_t server)
         .handler = post_config_handler,
         .user_ctx = nullptr
     };
-    httpd_register_uri_handler(server, &post_config_uri);
+    if (httpd_register_uri_handler(server, &post_config_uri) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register route POST /config");
+        return false;
+    }
     
     ESP_LOGI(TAG, "Config portal routes registered");
     return true;

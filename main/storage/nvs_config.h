@@ -20,6 +20,9 @@ public:
     
     // Erase all config from NVS (factory reset)
     static bool erase();
+    
+    // Erase all configuration and reboot to AP mode (factory reset)
+    static bool erase_all();
 };
 
 #endif // NVS_CONFIG_H

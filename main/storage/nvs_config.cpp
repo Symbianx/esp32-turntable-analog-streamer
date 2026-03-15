@@ -155,6 +155,16 @@ bool NVSConfig::load_factory_defaults(DeviceConfig *config)
             sizeof(config->device_name));
     config->http_port = DeviceConfig::DEFAULT_HTTP_PORT;
     config->max_clients = DeviceConfig::DEFAULT_MAX_CLIENTS;
+    
+    // MQTT defaults
+    config->mqtt_enabled = false;
+    strncpy(config->mqtt_broker, "", sizeof(config->mqtt_broker));
+    config->mqtt_port = DeviceConfig::DEFAULT_MQTT_PORT;
+    strncpy(config->mqtt_username, "", sizeof(config->mqtt_username));
+    strncpy(config->mqtt_password, "", sizeof(config->mqtt_password));
+    config->mqtt_use_tls = false;
+    config->audio_threshold_db = DeviceConfig::DEFAULT_AUDIO_THRESHOLD_DB;
+    
     config->crc32 = 0;
     
     ESP_LOGI(TAG, "Factory defaults loaded");
@@ -183,4 +193,28 @@ bool NVSConfig::erase()
         ErrorHandler::log_error(ErrorType::NVS_ERROR, "Failed to erase NVS config");
         return false;
     }
+}
+
+bool NVSConfig::erase_all()
+{
+    ESP_LOGW(TAG, "Erasing ALL configuration (factory reset)");
+    
+    // Erase NVS namespace
+    if (!erase()) {
+        ESP_LOGE(TAG, "Failed to erase NVS config");
+        return false;
+    }
+    
+    // Also erase WiFi config from default namespace
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("nvs.net80211", NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
+        nvs_erase_all(nvs_handle);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+        ESP_LOGI(TAG, "WiFi config erased");
+    }
+    
+    ESP_LOGW(TAG, "Factory reset complete, rebooting...");
+    return true;
 }
