@@ -12,6 +12,10 @@ High-quality 16-bit audio streaming from turntables (or any analog source) over 
 - Up to 3 concurrent clients
 - WiFi STA mode with auto-reconnect
 - Captive portal for WiFi and sample rate setup
+- Home Assistant MQTT auto-discovery
+- MQTT playback state publishing (`playing` / `idle`)
+- MQTT stream URL attributes and live connection status
+- Web UI for MQTT settings, connection testing, and factory reset
 - Real-time status and diagnostics page (HTML/JSON)
 - Clipping detection and recovery
 - Comprehensive serial logging
@@ -35,10 +39,10 @@ High-quality 16-bit audio streaming from turntables (or any analog source) over 
 
 | PCM1808 Pin | Function | ESP32 GPIO | Signal |
 |-------------|----------|-----------|--------|
-| SCKI (15) | System clock | GPIO9 | MCLK (12.288 MHz @ 48kHz) |
-| BCK (14) | Bit clock | GPIO3 | BCK |
-| LRCK (13) | Word select | GPIO85 | LRCK |
-| DOUT (12) | Audio data | GPIO46 | I²S RX |
+| SCKI (15) | System clock | GPIO8 | MCLK (12.288 MHz @ 48kHz) |
+| BCK (14) | Bit clock | GPIO16 | BCK |
+| LRCK (13) | Word select | GPIO18 | LRCK |
+| DOUT (12) | Audio data | GPIO17 | I²S RX |
 | MD0 (5) | Mode 0 | GND | Hardwired LOW |
 | MD1 (6) | Mode 1 | GND | Hardwired LOW |
 | FMT0 (7) | Format 0 | GND | Hardwired LOW |
@@ -67,6 +71,11 @@ cd esp32-turntable-analog-streamer
 2. **Build**:
 ```bash
 platformio run
+```
+
+If you are building from WSL with the same setup used in this repository, use:
+```bash
+/mnt/c/Users/Miguel/.platformio/penv/Scripts/platformio.exe run --environment esp32-s3-n16r8
 ```
 
 3. **Flash to ESP32**:
@@ -119,32 +128,61 @@ Open the stream URL in any media player:
 
 **Browser** (Chrome/Firefox):
 ```
-http://<esp32-ip>/stream.wav
+http://<esp32-ip>:8080/stream
 ```
 
 **VLC**:
 ```
-Media → Open Network Stream → http://<esp32-ip>/stream.wav
+Media → Open Network Stream → http://<esp32-ip>:8080/stream
 ```
 
 **foobar2000**:
 ```
-File → Open Location → http://<esp32-ip>/stream.wav
+File → Open Location → http://<esp32-ip>:8080/stream
 ```
 
 **FFmpeg**:
 ```bash
-ffplay http://<esp32-ip>/stream.wav
+ffplay http://<esp32-ip>:8080/stream
 ```
 
 ### Status Page
 
-Navigate to `http://<esp32-ip>/status` to view real-time diagnostics:
+Navigate to `http://<esp32-ip>:8080/status` to view real-time diagnostics:
 - Audio pipeline: sample rate, buffer fill, underruns, clipping status
 - System health: CPU usage per core, free heap, uptime
 - Network: WiFi RSSI, active clients, stream URL
+- MQTT: enabled flag, broker, connection state, last published playback state
 
-Also available as JSON: `curl -H "Accept: application/json" http://<esp32-ip>/status`
+Also available as JSON: `curl -H "Accept: application/json" http://<esp32-ip>:8080/status`
+
+### MQTT Integration
+
+1. Open `http://<esp32-ip>:8080/mqtt-settings`
+2. Enable MQTT and enter your broker host, port, and optional credentials
+3. Use **Test Connection** before saving
+4. Adjust the audio threshold while watching the live level meter
+5. Save settings and verify the device appears in Home Assistant via MQTT discovery
+
+Published topics follow the feature contract:
+
+- Discovery: `homeassistant/binary_sensor/<device_id>/playback_status/config`
+- State: `turntable/<device_id>/state`
+- Attributes: `turntable/<device_id>/attributes`
+- Availability: `turntable/<device_id>/availability`
+
+The device publishes:
+
+- Playback state as `playing` or `idle`
+- Stream URL as `http://<device-ip>:8080/stream`
+- Availability as `online` / `offline`
+
+### MQTT Troubleshooting
+
+- Discovery missing in Home Assistant: verify the broker is reachable and MQTT integration is enabled in Home Assistant.
+- Connection test fails: confirm broker host, port, credentials, and local network reachability.
+- Playback state never changes: lower the audio threshold on the MQTT settings page until the live level exceeds it during playback.
+- Stream URL is stale after DHCP renewal: reconnect WiFi or wait for the next `IP_EVENT_STA_GOT_IP` republish.
 
 ### Audio Format
 

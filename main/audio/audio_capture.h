@@ -27,6 +27,7 @@ public:
     // Playback detection (MQTT integration)
     static bool is_playing();
     static void set_threshold_db(float threshold_db);
+    static float get_threshold_db();
     static float get_current_rms_db();
 };
 

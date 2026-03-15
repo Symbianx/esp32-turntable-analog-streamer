@@ -25,14 +25,23 @@ static wifi_mode_t current_mode = WIFI_MODE_NULL;
 static esp_netif_t* sta_netif = nullptr;
 static esp_netif_t* ap_netif = nullptr;
 static bool mdns_initialized = false;
+static bool sta_autoconnect_enabled = true;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "WiFi STA started, connecting...");
-        esp_wifi_connect();
+        if (sta_autoconnect_enabled) {
+            ESP_LOGI(TAG, "WiFi STA started, connecting...");
+            esp_wifi_connect();
+        } else {
+            ESP_LOGI(TAG, "WiFi STA started for scan-only mode");
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (!sta_autoconnect_enabled) {
+            ESP_LOGI(TAG, "Ignoring STA disconnect during scan-only mode");
+            return;
+        }
         if (retry_count < MAX_RETRY) {
             esp_wifi_connect();
             retry_count++;
@@ -99,6 +108,7 @@ bool WiFiManager::connect_sta(const char* ssid, const char* password)
     }
     
     ESP_LOGI(TAG, "Connecting to WiFi SSID: %s", ssid);
+    sta_autoconnect_enabled = true;
     
     // Create default STA interface if needed
     if (sta_netif == nullptr) {
@@ -328,9 +338,13 @@ int WiFiManager::scan_networks(WiFiScanResult* results, int max_results)
     
     if (current_mode == WIFI_MODE_AP) {
         ESP_LOGI(TAG, "Switching to APSTA mode for scanning");
+        sta_autoconnect_enabled = false;
+        retry_count = 0;
+        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
         esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to switch to APSTA mode: %d", err);
+            sta_autoconnect_enabled = true;
             return 0;
         }
         current_mode = WIFI_MODE_APSTA;
@@ -351,6 +365,7 @@ int WiFiManager::scan_networks(WiFiScanResult* results, int max_results)
         if (mode_changed) {
             esp_wifi_set_mode(original_mode);
             current_mode = original_mode;
+            sta_autoconnect_enabled = true;
         }
         return 0;
     }
@@ -366,6 +381,7 @@ int WiFiManager::scan_networks(WiFiScanResult* results, int max_results)
         if (mode_changed) {
             esp_wifi_set_mode(original_mode);
             current_mode = original_mode;
+            sta_autoconnect_enabled = true;
         }
         return 0;
     }
@@ -401,6 +417,7 @@ int WiFiManager::scan_networks(WiFiScanResult* results, int max_results)
         ESP_LOGI(TAG, "Restoring AP-only mode");
         esp_wifi_set_mode(original_mode);
         current_mode = original_mode;
+        sta_autoconnect_enabled = true;
     }
     
     return result_count;

@@ -60,16 +60,16 @@ ESP32 embedded firmware project structure:
 
 ### Implementation for User Story 1
 
-- [ ] T011 [P] [US1] Create MQTTClient class header in main/network/mqtt_client.h
-- [ ] T012 [US1] Implement MQTTClient::init() with esp_mqtt_client_config_t setup in main/network/mqtt_client.cpp
-- [ ] T013 [US1] Implement MQTTClient::start() to begin connection loop in main/network/mqtt_client.cpp
-- [ ] T014 [US1] Implement MQTT event handler for CONNECTED, DISCONNECTED events in main/network/mqtt_client.cpp
-- [ ] T015 [US1] Generate DeviceIdentity (unique_id from MAC address) in main/network/mqtt_client.cpp
-- [ ] T016 [US1] Implement MQTTClient::publish_discovery() with JSON payload construction in main/network/mqtt_client.cpp
-- [ ] T017 [US1] Set Last Will Testament (LWT) for availability topic in main/network/mqtt_client.cpp
-- [ ] T018 [US1] Publish availability "online" message after successful connect in main/network/mqtt_client.cpp
-- [ ] T019 [US1] Implement exponential backoff reconnection (5s to 300s max) in main/network/mqtt_client.cpp
-- [ ] T020 [US1] Initialize MQTTClient in main.cpp after WiFi connection established
+- [X] T011 [P] [US1] Create MQTTClient class header in main/network/mqtt_service.h
+- [X] T012 [US1] Implement MQTTClient::init() with esp_mqtt_client_config_t setup in main/network/mqtt_client.cpp
+- [X] T013 [US1] Implement MQTTClient::start() to begin connection loop in main/network/mqtt_client.cpp
+- [X] T014 [US1] Implement MQTT event handler for CONNECTED, DISCONNECTED events in main/network/mqtt_client.cpp
+- [X] T015 [US1] Generate DeviceIdentity (unique_id from MAC address) in main/network/mqtt_client.cpp
+- [X] T016 [US1] Implement MQTTClient::publish_discovery() with JSON payload construction in main/network/mqtt_client.cpp
+- [X] T017 [US1] Set Last Will Testament (LWT) for availability topic in main/network/mqtt_client.cpp
+- [X] T018 [US1] Publish availability "online" message after successful connect in main/network/mqtt_client.cpp
+- [X] T019 [US1] Implement exponential backoff reconnection (5s to 300s max) in main/network/mqtt_client.cpp
+- [X] T020 [US1] Initialize MQTTClient in main.cpp after WiFi connection established
 
 **US1 Test Criteria**:
 - Device discovered in Home Assistant within 30 seconds ✓
@@ -87,13 +87,13 @@ ESP32 embedded firmware project structure:
 
 ### Implementation for User Story 2
 
-- [ ] T021 [P] [US2] Implement MQTTClient::publish_state(bool is_playing) in main/network/mqtt_client.cpp
-- [ ] T022 [P] [US2] Add FreeRTOS task MQTTClient::monitor_task() polling playback_status atomic flag in main/network/mqtt_client.cpp
-- [ ] T023 [US2] Implement state change detection with debounce (prevent rapid toggle) in main/network/mqtt_client.cpp
-- [ ] T024 [US2] Publish "playing" or "idle" to state topic with QoS 1 in main/network/mqtt_client.cpp
-- [ ] T025 [US2] Start monitor task after discovery published in main/network/mqtt_client.cpp
-- [ ] T026 [US2] Load audio_threshold_db from NVS and convert to linear amplitude in audio/audio_capture.cpp
-- [ ] T027 [US2] Validate threshold range [-60.0, -20.0] and clamp if needed in audio/audio_capture.cpp
+- [X] T021 [P] [US2] Implement MQTTClient::publish_state(bool is_playing) in main/network/mqtt_client.cpp
+- [X] T022 [P] [US2] Add FreeRTOS task MQTTClient::monitor_task() polling playback_status atomic flag in main/network/mqtt_client.cpp
+- [X] T023 [US2] Implement state change detection with debounce (prevent rapid toggle) in main/network/mqtt_client.cpp
+- [X] T024 [US2] Publish "playing" or "idle" to state topic with QoS 1 in main/network/mqtt_client.cpp
+- [X] T025 [US2] Start monitor task after discovery published in main/network/mqtt_client.cpp
+- [X] T026 [US2] Load audio_threshold_db from NVS and convert to linear amplitude in audio/audio_capture.cpp
+- [X] T027 [US2] Validate threshold range [-60.0, -20.0] and clamp if needed in audio/audio_capture.cpp
 
 **US2 Test Criteria**:
 - Playback status updates within 2 seconds of audio start ✓
@@ -111,13 +111,13 @@ ESP32 embedded firmware project structure:
 
 ### Implementation for User Story 3
 
-- [ ] T028 [P] [US3] Implement MQTTClient::publish_attributes(const char* stream_url) in main/network/mqtt_client.cpp
-- [ ] T029 [P] [US3] Construct JSON payload with stream_url field in main/network/mqtt_client.cpp
-- [ ] T030 [US3] Publish attributes to json_attributes_topic with QoS 1 in main/network/mqtt_client.cpp
-- [ ] T031 [US3] Register WiFi IP change event handler in main/network/mqtt_client.cpp
-- [ ] T032 [US3] Construct stream URL from current IP address and port 8080 in main/network/mqtt_client.cpp
-- [ ] T033 [US3] Publish initial stream URL after discovery in main/network/mqtt_client.cpp
-- [ ] T034 [US3] Republish stream URL on WiFi IP change event in main/network/mqtt_client.cpp
+- [X] T028 [P] [US3] Implement MQTTClient::publish_attributes(const char* stream_url) in main/network/mqtt_client.cpp
+- [X] T029 [P] [US3] Construct JSON payload with stream_url field in main/network/mqtt_client.cpp
+- [X] T030 [US3] Publish attributes to json_attributes_topic with QoS 1 in main/network/mqtt_client.cpp
+- [X] T031 [US3] Register WiFi IP change event handler in main/network/mqtt_client.cpp
+- [X] T032 [US3] Construct stream URL from current IP address and port 8080 in main/network/mqtt_client.cpp
+- [X] T033 [US3] Publish initial stream URL after discovery in main/network/mqtt_client.cpp
+- [X] T034 [US3] Republish stream URL on WiFi IP change event in main/network/mqtt_client.cpp
 
 **US3 Test Criteria**:
 - Stream URL attribute present in Home Assistant device ✓
@@ -135,28 +135,28 @@ ESP32 embedded firmware project structure:
 
 ### Implementation for User Story 4
 
-- [ ] T035 [P] [US4] Create HTML template for MQTT settings form in main/network/http_server.cpp
-- [ ] T036 [P] [US4] Implement GET /mqtt-settings handler rendering form with current config in main/network/http_server.cpp
-- [ ] T037 [P] [US4] Add threshold slider with JavaScript for real-time value display in main/network/http_server.cpp
-- [ ] T038 [P] [US4] Add current audio level indicator div with JavaScript auto-update in main/network/http_server.cpp
-- [ ] T039 [US4] Implement POST /mqtt-settings handler parsing form data in main/network/http_server.cpp
-- [ ] T040 [US4] Validate broker field (non-empty if enabled, max 127 chars) in main/network/http_server.cpp
-- [ ] T041 [US4] Validate port field (1-65535 range) in main/network/http_server.cpp
-- [ ] T042 [US4] Validate username/password (both set or both empty, max 63 chars) in main/network/http_server.cpp
-- [ ] T043 [US4] Validate and clamp threshold_db to [-60.0, -20.0] range in main/network/http_server.cpp
-- [ ] T044 [US4] Save valid config to NVS via NVSConfig::save() in main/network/http_server.cpp
-- [ ] T045 [US4] Trigger MQTTClient reconnect if broker settings changed in main/network/http_server.cpp
-- [ ] T046 [US4] Update audio threshold immediately (no reboot required) in main/network/http_server.cpp
-- [ ] T047 [US4] Return success page with current connection status in main/network/http_server.cpp
-- [ ] T048 [P] [US4] Implement POST /mqtt-settings/test handler for connection test in main/network/http_server.cpp
-- [ ] T049 [US4] Test connection with provided credentials (5s timeout) in main/network/http_server.cpp
-- [ ] T050 [US4] Return JSON response {"status": "success/error", "message": "..."} in main/network/http_server.cpp
-- [ ] T051 [P] [US4] Implement POST /mqtt-settings/reset handler with confirm check in main/network/http_server.cpp
-- [ ] T052 [US4] Validate confirm=yes parameter (400 Bad Request if missing) in main/network/http_server.cpp
-- [ ] T053 [US4] Call NVSConfig::erase_all() to wipe all settings in main/network/http_server.cpp
-- [ ] T054 [US4] Schedule reboot in 2 seconds and return confirmation page in main/network/http_server.cpp
-- [ ] T055 [US4] Add navigation link to /mqtt-settings from existing /status page in main/network/http_server.cpp
-- [ ] T056 [P] [US4] Implement GET /api/audio-level endpoint for real-time level polling in main/network/http_server.cpp
+- [X] T035 [P] [US4] Create HTML template for MQTT settings form in main/network/http_server.cpp
+- [X] T036 [P] [US4] Implement GET /mqtt-settings handler rendering form with current config in main/network/http_server.cpp
+- [X] T037 [P] [US4] Add threshold slider with JavaScript for real-time value display in main/network/http_server.cpp
+- [X] T038 [P] [US4] Add current audio level indicator div with JavaScript auto-update in main/network/http_server.cpp
+- [X] T039 [US4] Implement POST /mqtt-settings handler parsing form data in main/network/http_server.cpp
+- [X] T040 [US4] Validate broker field (non-empty if enabled, max 127 chars) in main/network/http_server.cpp
+- [X] T041 [US4] Validate port field (1-65535 range) in main/network/http_server.cpp
+- [X] T042 [US4] Validate username/password (both set or both empty, max 63 chars) in main/network/http_server.cpp
+- [X] T043 [US4] Validate and clamp threshold_db to [-60.0, -20.0] range in main/network/http_server.cpp
+- [X] T044 [US4] Save valid config to NVS via NVSConfig::save() in main/network/http_server.cpp
+- [X] T045 [US4] Trigger MQTTClient reconnect if broker settings changed in main/network/http_server.cpp
+- [X] T046 [US4] Update audio threshold immediately (no reboot required) in main/network/http_server.cpp
+- [X] T047 [US4] Return success page with current connection status in main/network/http_server.cpp
+- [X] T048 [P] [US4] Implement POST /mqtt-settings/test handler for connection test in main/network/http_server.cpp
+- [X] T049 [US4] Test connection with provided credentials (5s timeout) in main/network/http_server.cpp
+- [X] T050 [US4] Return JSON response {"status": "success/error", "message": "..."} in main/network/http_server.cpp
+- [X] T051 [P] [US4] Implement POST /mqtt-settings/reset handler with confirm check in main/network/http_server.cpp
+- [X] T052 [US4] Validate confirm=yes parameter (400 Bad Request if missing) in main/network/http_server.cpp
+- [X] T053 [US4] Call NVSConfig::erase_all() to wipe all settings in main/network/http_server.cpp
+- [X] T054 [US4] Schedule reboot in 2 seconds and return confirmation page in main/network/http_server.cpp
+- [X] T055 [US4] Add navigation link to /mqtt-settings from existing /status page in main/network/http_server.cpp
+- [X] T056 [P] [US4] Implement GET /api/audio-level endpoint for real-time level polling in main/network/http_server.cpp
 
 **US4 Test Criteria**:
 - MQTT Settings link accessible from status page ✓
@@ -173,16 +173,16 @@ ESP32 embedded firmware project structure:
 
 **Purpose**: Finalization, documentation, and verification
 
-- [ ] T057 [P] Add MQTT connection status indicator to existing /status page in main/network/http_server.cpp
-- [ ] T058 [P] Update status page JSON response with MQTT fields (enabled, connected, broker, last_state) in main/network/http_server.cpp
-- [ ] T059 [P] Add ESP_LOGI logging for MQTT connection events in main/network/mqtt_client.cpp
-- [ ] T060 [P] Add ESP_LOGW logging for MQTT errors and reconnection attempts in main/network/mqtt_client.cpp
-- [ ] T061 [P] Add ESP_LOGI logging for audio threshold changes in audio/audio_capture.cpp
+- [X] T057 [P] Add MQTT connection status indicator to existing /status page in main/network/http_server.cpp
+- [X] T058 [P] Update status page JSON response with MQTT fields (enabled, connected, broker, last_state) in main/network/http_server.cpp
+- [X] T059 [P] Add ESP_LOGI logging for MQTT connection events in main/network/mqtt_client.cpp
+- [X] T060 [P] Add ESP_LOGW logging for MQTT errors and reconnection attempts in main/network/mqtt_client.cpp
+- [X] T061 [P] Add ESP_LOGI logging for audio threshold changes in audio/audio_capture.cpp
 - [ ] T062 [P] Verify memory budget: MQTT client heap usage <50KB via heap tracing in main.cpp
 - [ ] T063 [P] Verify CPU overhead: Audio task <10% increase via FreeRTOS stats in main.cpp
 - [ ] T064 Verify message rate: <1 msg/sec average during normal operation via MQTT broker logs
 - [ ] T065 Run 7-day continuous operation test (SC-004 requirement)
-- [ ] T066 [P] Update README.md with MQTT setup instructions and troubleshooting
+- [X] T066 [P] Update README.md with MQTT setup instructions and troubleshooting
 - [ ] T067 [P] Test factory reset erases all config and reboots to AP mode (10 trials for SC-009)
 
 ---

@@ -25,9 +25,14 @@ static std::atomic<bool> clipping_detected{false};
 
 // Playback detection state (T007)
 static std::atomic<bool> playback_status{false};
+static float audio_threshold_db_value = -40.0f;
 static float audio_threshold_linear = 838.0f;  // Default: -40dB for 24-bit
 static float rms_accumulator = 0.0f;
 constexpr float RMS_ALPHA = 0.05f;  // Exponential moving average factor
+constexpr float PLAYBACK_ENTER_HYSTERESIS = 1.35f;
+constexpr float PLAYBACK_EXIT_HYSTERESIS = 0.75f;
+constexpr uint32_t PLAYBACK_ON_DEBOUNCE_CHUNKS = 120;   // ~600ms at 48kHz with 240-frame chunks
+constexpr uint32_t PLAYBACK_OFF_DEBOUNCE_CHUNKS = 100;  // ~500ms at 48kHz with 240-frame chunks
 constexpr int32_t MAX_24BIT = 8388608;  // 2^23
 
 // Clipping detection parameters
@@ -158,35 +163,42 @@ static void audio_capture_task(void *params)
             
             // Exponential moving average (debounce)
             rms_accumulator = (RMS_ALPHA * chunk_rms) + ((1.0f - RMS_ALPHA) * rms_accumulator);
-            
-            // Threshold comparison (T009)
-            bool is_playing = (rms_accumulator > audio_threshold_linear);
-            
-            // Update atomic flag (lock-free)
+
+            // Threshold comparison with hysteresis (T009/T010)
             bool prev_status = playback_status.load(std::memory_order_relaxed);
-            if (is_playing != prev_status) {
-                // State change - apply debounce (T010)
-                static uint32_t state_change_counter = 0;
-                static bool pending_state = false;
-                
-                if (pending_state != is_playing) {
-                    // New state different from pending - reset counter
-                    pending_state = is_playing;
-                    state_change_counter = 0;
+            float enter_threshold = audio_threshold_linear * PLAYBACK_ENTER_HYSTERESIS;
+            float exit_threshold = audio_threshold_linear * PLAYBACK_EXIT_HYSTERESIS;
+            bool candidate_state = prev_status
+                ? (rms_accumulator > exit_threshold)
+                : (rms_accumulator > enter_threshold);
+
+            static uint32_t state_change_counter = 0;
+            static bool pending_state = false;
+
+            if (candidate_state == prev_status) {
+                state_change_counter = 0;
+                pending_state = prev_status;
+            } else {
+                if (pending_state != candidate_state) {
+                    pending_state = candidate_state;
+                    state_change_counter = 1;
+                } else {
+                    state_change_counter++;
                 }
-                
-                state_change_counter++;
-                
-                // Debounce: 200ms for idle->playing, 500ms for playing->idle
-                // At 240 frames per chunk, 48kHz: ~5ms per chunk
-                // 200ms ≈ 40 chunks, 500ms ≈ 100 chunks
-                uint32_t debounce_threshold = is_playing ? 40 : 100;
-                
+
+                uint32_t debounce_threshold = candidate_state
+                    ? PLAYBACK_ON_DEBOUNCE_CHUNKS
+                    : PLAYBACK_OFF_DEBOUNCE_CHUNKS;
+
                 if (state_change_counter >= debounce_threshold) {
-                    playback_status.store(is_playing, std::memory_order_release);
+                    playback_status.store(candidate_state, std::memory_order_release);
                     state_change_counter = 0;
-                    ESP_LOGI(TAG, "Playback status changed: %s (RMS: %.1f, threshold: %.1f)",
-                             is_playing ? "PLAYING" : "IDLE", rms_accumulator, audio_threshold_linear);
+                    ESP_LOGI(TAG,
+                             "Playback status changed: %s (RMS: %.1f, on: %.1f, off: %.1f)",
+                             candidate_state ? "PLAYING" : "IDLE",
+                             rms_accumulator,
+                             enter_threshold,
+                             exit_threshold);
                 }
             }
         }
@@ -284,10 +296,22 @@ bool AudioCapture::is_playing()
 
 void AudioCapture::set_threshold_db(float threshold_db)
 {
+    if (threshold_db < -60.0f) {
+        threshold_db = -60.0f;
+    } else if (threshold_db > -20.0f) {
+        threshold_db = -20.0f;
+    }
+
+    audio_threshold_db_value = threshold_db;
     // Convert dB to linear amplitude for 24-bit audio
     // linear = 2^23 * 10^(dB/20)
     audio_threshold_linear = MAX_24BIT * powf(10.0f, threshold_db / 20.0f);
     ESP_LOGI(TAG, "Audio threshold set to %.1f dB (linear: %.1f)", threshold_db, audio_threshold_linear);
+}
+
+float AudioCapture::get_threshold_db()
+{
+    return audio_threshold_db_value;
 }
 
 float AudioCapture::get_current_rms_db()

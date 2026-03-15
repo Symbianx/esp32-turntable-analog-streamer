@@ -1,13 +1,15 @@
-#include "mqtt_client.h"
+#include "mqtt_service.h"
 #include "../config_schema.h"
 #include "../storage/nvs_config.h"
 #include "../audio/audio_capture.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_event.h"
 #include "esp_netif.h"
-#include "mqtt_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "mqtt_client.h"
+#include <atomic>
 #include <cstring>
 #include <cstdio>
 
@@ -15,18 +17,27 @@ static const char *TAG = "mqtt_client";
 
 // MQTT client state
 static esp_mqtt_client_handle_t mqtt_client = nullptr;
+static std::atomic<bool> mqtt_enabled{false};
 static std::atomic<bool> connected{false};
 static std::atomic<bool> monitor_running{false};
+static std::atomic<bool> reconnect_scheduled{false};
+static std::atomic<bool> auth_failed{false};
 static TaskHandle_t monitor_task_handle = nullptr;
+static TaskHandle_t reconnect_task_handle = nullptr;
 static char last_error[128] = {0};
 static char device_id[32] = {0};
+static char broker_uri[192] = {0};
+static char broker_host[128] = {0};
+static char last_state[16] = "idle";
 static uint32_t reconnect_delay_ms = 5000;  // Start at 5 seconds
+static bool ip_handler_registered = false;
 
 // Device metadata
+constexpr const char* DISCOVERY_NAME = "Turntable Playback";
 constexpr const char* DEVICE_NAME = "ESP32 Turntable Streamer";
-constexpr const char* DEVICE_MODEL = "PCM1808 Audio Streamer";
-constexpr const char* DEVICE_MANUFACTURER = "SymbianX";
-constexpr const char* SW_VERSION = "1.0.0";
+constexpr const char* DEVICE_MODEL = "PCM1808 HTTP Streamer";
+constexpr const char* DEVICE_MANUFACTURER = "Custom";
+constexpr const char* SW_VERSION = "2.0.0";
 
 // MQTT topics (will be constructed with device_id)
 static char discovery_topic[256];
@@ -34,19 +45,46 @@ static char state_topic[128];
 static char attributes_topic[128];
 static char availability_topic[128];
 
+static void mqtt_reconnect_task_entry(void* params);
+
+static void schedule_reconnect()
+{
+    if (mqtt_client == nullptr || reconnect_scheduled.load(std::memory_order_acquire) ||
+        auth_failed.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    reconnect_scheduled.store(true, std::memory_order_release);
+    BaseType_t result = xTaskCreatePinnedToCore(
+        mqtt_reconnect_task_entry,
+        "mqtt_reconnect",
+        3072,
+        nullptr,
+        4,
+        &reconnect_task_handle,
+        0);
+    if (result != pdPASS) {
+        reconnect_scheduled.store(false, std::memory_order_release);
+        reconnect_task_handle = nullptr;
+        ESP_LOGW(TAG, "Failed to schedule MQTT reconnect task");
+    }
+}
+
 bool MQTTClient::init()
 {
     ESP_LOGI(TAG, "Initializing MQTT client");
+    last_error[0] = '\0';
     
     // Load configuration from NVS
     DeviceConfig config;
-    if (!NVSConfig::load(config)) {
+    if (!NVSConfig::load(&config)) {
         ESP_LOGE(TAG, "Failed to load configuration");
         strncpy(last_error, "Failed to load config from NVS", sizeof(last_error) - 1);
         return false;
     }
     
     // Check if MQTT is enabled
+    mqtt_enabled.store(config.mqtt_enabled, std::memory_order_release);
     if (!config.mqtt_enabled) {
         ESP_LOGI(TAG, "MQTT is disabled in configuration");
         return true;  // Not an error, just disabled
@@ -58,6 +96,9 @@ bool MQTTClient::init()
         strncpy(last_error, "Broker address not configured", sizeof(last_error) - 1);
         return false;
     }
+
+    strncpy(broker_host, config.mqtt_broker, sizeof(broker_host) - 1);
+    broker_host[sizeof(broker_host) - 1] = '\0';
     
     // Generate unique device ID from MAC address
     generate_device_id(device_id, sizeof(device_id));
@@ -65,18 +106,29 @@ bool MQTTClient::init()
     
     // Construct topic paths
     snprintf(discovery_topic, sizeof(discovery_topic),
-             "homeassistant/binary_sensor/%s/config", device_id);
+             "homeassistant/binary_sensor/%s/playback_status/config", device_id);
     snprintf(state_topic, sizeof(state_topic),
-             "homeassistant/binary_sensor/%s/state", device_id);
+             "turntable/%s/state", device_id);
     snprintf(attributes_topic, sizeof(attributes_topic),
-             "homeassistant/binary_sensor/%s/attributes", device_id);
+             "turntable/%s/attributes", device_id);
     snprintf(availability_topic, sizeof(availability_topic),
-             "homeassistant/binary_sensor/%s/availability", device_id);
+             "turntable/%s/availability", device_id);
+
+    snprintf(broker_uri, sizeof(broker_uri), "%s://%s:%u",
+             config.mqtt_use_tls ? "mqtts" : "mqtt",
+             config.mqtt_broker,
+             static_cast<unsigned>(config.mqtt_port));
     
     // Configure MQTT client
     esp_mqtt_client_config_t mqtt_cfg = {};
-    mqtt_cfg.broker.address.uri = config.mqtt_broker;
-    mqtt_cfg.broker.address.port = config.mqtt_port;
+    mqtt_cfg.broker.address.uri = broker_uri;
+    mqtt_cfg.credentials.client_id = device_id;
+    mqtt_cfg.session.disable_clean_session = true;
+    mqtt_cfg.session.keepalive = 60;
+    mqtt_cfg.network.timeout_ms = 5000;
+    mqtt_cfg.network.disable_auto_reconnect = true;
+    mqtt_cfg.buffer.size = 1024;
+    mqtt_cfg.buffer.out_size = 1024;
     
     // Set credentials if provided
     if (strlen(config.mqtt_username) > 0) {
@@ -96,6 +148,11 @@ bool MQTTClient::init()
     mqtt_cfg.session.last_will.msg_len = 7;
     mqtt_cfg.session.last_will.qos = 1;
     mqtt_cfg.session.last_will.retain = 1;
+
+    auth_failed.store(false, std::memory_order_release);
+    reconnect_delay_ms = 5000;
+    strncpy(last_state, AudioCapture::is_playing() ? "playing" : "idle", sizeof(last_state) - 1);
+    last_state[sizeof(last_state) - 1] = '\0';
     
     // Create MQTT client
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -107,8 +164,12 @@ bool MQTTClient::init()
     
     // Register event handler
     esp_mqtt_client_register_event(mqtt_client, MQTT_EVENT_ANY, event_handler, nullptr);
+    if (!ip_handler_registered) {
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_handler, nullptr));
+        ip_handler_registered = true;
+    }
     
-    ESP_LOGI(TAG, "MQTT client initialized (broker: %s:%d)", config.mqtt_broker, config.mqtt_port);
+    ESP_LOGI(TAG, "MQTT client initialized (broker: %s)", broker_uri);
     return true;
 }
 
@@ -153,7 +214,15 @@ bool MQTTClient::stop()
     
     esp_mqtt_client_destroy(mqtt_client);
     mqtt_client = nullptr;
+    mqtt_enabled.store(false, std::memory_order_release);
     connected.store(false, std::memory_order_release);
+    reconnect_scheduled.store(false, std::memory_order_release);
+    auth_failed.store(false, std::memory_order_release);
+
+    if (ip_handler_registered) {
+        esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_event_handler);
+        ip_handler_registered = false;
+    }
     
     return true;
 }
@@ -167,22 +236,18 @@ bool MQTTClient::publish_discovery()
     
     ESP_LOGI(TAG, "Publishing Home Assistant auto-discovery config");
     
-    // Get current IP for stream URL
-    char stream_url[128];
-    get_stream_url(stream_url, sizeof(stream_url));
-    
     // Construct JSON discovery payload
     char payload[768];
     snprintf(payload, sizeof(payload),
         "{"
-        "\"name\":\"%s\","
-        "\"unique_id\":\"%s\","
+        "\"name\":\"%s\"," 
+        "\"unique_id\":\"%s_playback\"," 
+        "\"device_class\":\"sound\"," 
         "\"state_topic\":\"%s\","
+        "\"payload_on\":\"playing\"," 
+        "\"payload_off\":\"idle\"," 
+        "\"json_attributes_topic\":\"%s\"," 
         "\"availability_topic\":\"%s\","
-        "\"json_attributes_topic\":\"%s\","
-        "\"payload_on\":\"playing\","
-        "\"payload_off\":\"idle\","
-        "\"device_class\":\"running\","
         "\"device\":{"
             "\"identifiers\":[\"%s\"],"
             "\"name\":\"%s\","
@@ -191,11 +256,11 @@ bool MQTTClient::publish_discovery()
             "\"sw_version\":\"%s\""
         "}"
         "}",
-        DEVICE_NAME,
+        DISCOVERY_NAME,
         device_id,
         state_topic,
-        availability_topic,
         attributes_topic,
+        availability_topic,
         device_id,
         DEVICE_NAME,
         DEVICE_MODEL,
@@ -227,6 +292,9 @@ bool MQTTClient::publish_state(bool is_playing)
         ESP_LOGW(TAG, "Failed to publish state");
         return false;
     }
+
+    strncpy(last_state, state, sizeof(last_state) - 1);
+    last_state[sizeof(last_state) - 1] = '\0';
     
     ESP_LOGD(TAG, "State published: %s", state);
     return true;
@@ -242,7 +310,7 @@ bool MQTTClient::publish_attributes(const char* stream_url)
     char payload[256];
     snprintf(payload, sizeof(payload), "{\"stream_url\":\"%s\"}", stream_url);
     
-    int msg_id = esp_mqtt_client_publish(mqtt_client, attributes_topic, payload, 0, 1, 0);
+    int msg_id = esp_mqtt_client_publish(mqtt_client, attributes_topic, payload, 0, 1, 1);
     
     if (msg_id < 0) {
         ESP_LOGW(TAG, "Failed to publish attributes");
@@ -266,9 +334,24 @@ bool MQTTClient::reconnect()
     return start();
 }
 
+bool MQTTClient::is_enabled()
+{
+    return mqtt_enabled.load(std::memory_order_acquire);
+}
+
 bool MQTTClient::is_connected()
 {
     return connected.load(std::memory_order_acquire);
+}
+
+const char* MQTTClient::get_broker()
+{
+    return broker_host;
+}
+
+const char* MQTTClient::get_last_state()
+{
+    return last_state;
 }
 
 const char* MQTTClient::get_last_error()
@@ -309,6 +392,24 @@ void MQTTClient::monitor_task(void* params)
     }
     
     ESP_LOGI(TAG, "Monitor task stopped");
+    monitor_task_handle = nullptr;
+    vTaskDelete(nullptr);
+}
+
+static void mqtt_reconnect_task_entry(void* params)
+{
+    uint32_t delay_ms = reconnect_delay_ms;
+    ESP_LOGW(TAG, "Scheduling reconnect in %lu ms", static_cast<unsigned long>(delay_ms));
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+
+    if (mqtt_client != nullptr && !connected.load(std::memory_order_acquire) &&
+        !auth_failed.load(std::memory_order_acquire)) {
+        ESP_LOGI(TAG, "Attempting MQTT reconnect");
+        esp_mqtt_client_reconnect(mqtt_client);
+    }
+
+    reconnect_task_handle = nullptr;
+    reconnect_scheduled.store(false, std::memory_order_release);
     vTaskDelete(nullptr);
 }
 
@@ -320,6 +421,7 @@ void MQTTClient::event_handler(void* handler_args, esp_event_base_t base, int32_
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI(TAG, "MQTT connected");
             connected.store(true, std::memory_order_release);
+            reconnect_scheduled.store(false, std::memory_order_release);
             reconnect_delay_ms = 5000;  // Reset backoff
             
             // Publish availability "online"
@@ -327,6 +429,8 @@ void MQTTClient::event_handler(void* handler_args, esp_event_base_t base, int32_
             
             // Publish discovery configuration
             publish_discovery();
+
+            publish_state(AudioCapture::is_playing());
             
             // Publish initial stream URL
             char stream_url[128];
@@ -363,12 +467,30 @@ void MQTTClient::event_handler(void* handler_args, esp_event_base_t base, int32_
                 }
             }
             ESP_LOGI(TAG, "Next reconnect attempt in %lu seconds", reconnect_delay_ms / 1000);
+            schedule_reconnect();
             break;
             
         case MQTT_EVENT_ERROR:
-            ESP_LOGE(TAG, "MQTT error: %d", event->error_handle->error_type);
-            if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-                ESP_LOGE(TAG, "Last errno: %d", event->error_handle->esp_transport_sock_errno);
+            if (event != nullptr && event->error_handle != nullptr) {
+                ESP_LOGE(TAG, "MQTT error: %d", event->error_handle->error_type);
+                if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                    switch (event->error_handle->connect_return_code) {
+                        case MQTT_CONNECTION_REFUSE_BAD_USERNAME:
+                        case MQTT_CONNECTION_REFUSE_NOT_AUTHORIZED:
+                            strncpy(last_error, "Authentication failed", sizeof(last_error) - 1);
+                            auth_failed.store(true, std::memory_order_release);
+                            break;
+                        case MQTT_CONNECTION_REFUSE_SERVER_UNAVAILABLE:
+                            strncpy(last_error, "Connection refused", sizeof(last_error) - 1);
+                            break;
+                        default:
+                            strncpy(last_error, "Broker refused connection", sizeof(last_error) - 1);
+                            break;
+                    }
+                } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                    snprintf(last_error, sizeof(last_error), "Network error (%d)", event->error_handle->esp_transport_sock_errno);
+                    ESP_LOGE(TAG, "Last errno: %d", event->error_handle->esp_transport_sock_errno);
+                }
             }
             break;
             
@@ -381,27 +503,48 @@ void MQTTClient::event_handler(void* handler_args, esp_event_base_t base, int32_
     }
 }
 
+void MQTTClient::ip_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data)
+{
+    if (base != IP_EVENT || event_id != IP_EVENT_STA_GOT_IP) {
+        return;
+    }
+
+    if (!connected.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    char stream_url[128];
+    get_stream_url(stream_url, sizeof(stream_url));
+    publish_attributes(stream_url);
+}
+
 void MQTTClient::generate_device_id(char* buffer, size_t len)
 {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(buffer, len, "esp32_turntable_%02x%02x%02x%02x%02x%02x",
+    snprintf(buffer, len, "esp32_%02x%02x%02x%02x%02x%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void MQTTClient::get_stream_url(char* buffer, size_t len)
 {
+    DeviceConfig config;
+    uint16_t http_port = DeviceConfig::DEFAULT_HTTP_PORT;
+    if (NVSConfig::load(&config)) {
+        http_port = config.http_port;
+    }
+
     esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (netif == nullptr) {
-        snprintf(buffer, len, "http://unknown:8080/stream");
+        snprintf(buffer, len, "http://unknown:%u/stream", static_cast<unsigned>(http_port));
         return;
     }
     
     esp_netif_ip_info_t ip_info;
     if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) {
-        snprintf(buffer, len, "http://unknown:8080/stream");
+        snprintf(buffer, len, "http://unknown:%u/stream", static_cast<unsigned>(http_port));
         return;
     }
     
-    snprintf(buffer, len, "http://" IPSTR ":8080/stream", IP2STR(&ip_info.ip));
+    snprintf(buffer, len, "http://" IPSTR ":%u/stream", IP2STR(&ip_info.ip), static_cast<unsigned>(http_port));
 }

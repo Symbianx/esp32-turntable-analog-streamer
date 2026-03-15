@@ -9,7 +9,7 @@
 #include "network/wifi_manager.h"
 #include "network/config_portal.h"
 #include "network/http_server.h"
-#include "network/mqtt_client.h"
+#include "network/mqtt_service.h"
 #include "storage/nvs_config.h"
 #include "config_schema.h"
 #include "system/rgb_led.h"
@@ -95,12 +95,14 @@ static bool init() {
     ESP_LOGI(TAG, "WiFi connected, starting services...");
     DeviceConfig loaded_config;
     uint32_t sample_rate = 48000;  // Default
+    uint16_t http_port = DeviceConfig::DEFAULT_HTTP_PORT;
     if (NVSConfig::load(&loaded_config)) {
         sample_rate = loaded_config.sample_rate;
+        http_port = loaded_config.http_port;
     }
     RGBLed::step_http_server();
     vTaskDelay(pdMS_TO_TICKS(500));
-    if (!HTTPServer::init(80, sample_rate)) {
+    if (!HTTPServer::init(http_port, sample_rate)) {
         ESP_LOGE(TAG, "Failed to initialize HTTP server");
         return false;
     }
@@ -160,7 +162,7 @@ static bool init() {
     char ip[16];
     WiFiManager::get_ip_address(ip, sizeof(ip));
     ESP_LOGI(TAG, "=== System Ready ===");
-    ESP_LOGI(TAG, "Stream URL: http://%s/stream.wav", ip);
+    ESP_LOGI(TAG, "Stream URL: http://%s:%u/stream", ip, http_port);
     return true;
 }
 
