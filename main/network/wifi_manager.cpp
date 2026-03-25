@@ -127,6 +127,8 @@ bool WiFiManager::connect_sta(const char* ssid, const char* password)
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;
+    wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;   // Scan all APs with matching SSID
+    wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL; // Pick strongest signal
     
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     
