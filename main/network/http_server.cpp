@@ -43,6 +43,7 @@ static void add_cors_headers(httpd_req_t *req)
 struct StreamTaskContext {
     httpd_req_t *req;
     int client_id;
+    bool is_24bit;
 };
 
 // Initialize client slots
@@ -493,7 +494,8 @@ static void stream_task(void *arg)
     httpd_req_t *req = ctx->req;
     int client_id = ctx->client_id;
     
-    ESP_LOGI(TAG, "Stream task started for client %d", client_id);
+    bool is_24bit = ctx->is_24bit;
+    ESP_LOGI(TAG, "Stream task started for client %d (%d-bit)", client_id, is_24bit ? 24 : 16);
 
     // Chunk aligned to DMA production unit (240 frames × 6 bytes = 5ms at 48kHz)
     uint8_t audio_chunk_24bit[1440];  // 24-bit input from ring buffer
@@ -503,8 +505,9 @@ static void stream_task(void *arg)
     uint32_t period_bytes = 0;
     uint32_t empty_waits = 0;
 
-    // Pacing: match send rate to audio production rate (16-bit output)
-    uint32_t byte_rate = current_sample_rate * 4; // sample_rate × 2ch × 2bytes (16-bit)
+    // Pacing: match send rate to audio production rate
+    // 16-bit: sample_rate × 2ch × 2bytes, 24-bit: sample_rate × 2ch × 3bytes
+    uint32_t byte_rate = is_24bit ? (current_sample_rate * 6) : (current_sample_rate * 4);
 
     while (clients[client_id].is_active)
     {
@@ -531,23 +534,33 @@ static void stream_task(void *arg)
 
         empty_waits = 0;
 
-        // Downsample 24-bit to 16-bit
-        size_t bytes_16bit = StreamHandler::downsample_24to16(audio_chunk_24bit, audio_chunk_16bit, bytes_read);
-        if (bytes_16bit == 0)
-        {
-            ESP_LOGE(TAG, "Downsampling failed for client %d", client_id);
-            break;
+        size_t send_bytes;
+        const uint8_t *send_buf;
+
+        if (is_24bit) {
+            // 24-bit mode: send ring buffer data directly (already 24-bit packed)
+            send_buf = audio_chunk_24bit;
+            send_bytes = bytes_read;
+        } else {
+            // 16-bit mode: downsample with TPDF dithering
+            send_bytes = StreamHandler::downsample_24to16(audio_chunk_24bit, audio_chunk_16bit, bytes_read);
+            if (send_bytes == 0)
+            {
+                ESP_LOGE(TAG, "Downsampling failed for client %d", client_id);
+                break;
+            }
+            send_buf = audio_chunk_16bit;
         }
 
-        // Send 16-bit audio chunk
-        if (httpd_resp_send_chunk(req, (const char *)audio_chunk_16bit, bytes_16bit) != ESP_OK)
+        // Send audio chunk
+        if (httpd_resp_send_chunk(req, (const char *)send_buf, send_bytes) != ESP_OK)
         {
             ESP_LOGI(TAG, "Client %d disconnected", client_id);
             break;
         }
 
-        clients[client_id].bytes_sent += bytes_16bit;
-        period_bytes += bytes_16bit;
+        clients[client_id].bytes_sent += send_bytes;
+        period_bytes += send_bytes;
 
         // Log throughput every 10 seconds
         uint32_t now = esp_timer_get_time() / 1000000;
@@ -555,9 +568,9 @@ static void stream_task(void *arg)
         if (elapsed >= 10)
         {
             uint32_t kbps = (period_bytes * 8) / (elapsed * 1000);
-            uint32_t target_kbps = (current_sample_rate * 4 * 8) / 1000;  // 16-bit stereo bitrate
-            ESP_LOGI(TAG, "Client %d: %u kbps (target: %u), total %llu bytes",
-                     client_id, kbps, target_kbps, clients[client_id].bytes_sent);
+            uint32_t target_kbps = (byte_rate * 8) / 1000;
+            ESP_LOGI(TAG, "Client %d (%d-bit): %u kbps (target: %u), total %llu bytes",
+                     client_id, is_24bit ? 24 : 16, kbps, target_kbps, clients[client_id].bytes_sent);
             period_bytes = 0;
             last_log_time = now;
         }
@@ -569,17 +582,18 @@ static void stream_task(void *arg)
             break;
         }
 
-        // // Pace sends to match audio production rate.
-        // // Calculate how long this chunk represents in real-time, then wait
-        // // the remaining duration after subtracting time already spent on
-        // // the read+send. This prevents burst-drain-starve buffer oscillation.
-        // TickType_t target_ticks = pdMS_TO_TICKS((bytes_read * 1000) / byte_rate);
-        // if (target_ticks < 1) target_ticks = 1;
-        // TickType_t elapsed_ticks = xTaskGetTickCount() - iter_start;
-        // if (elapsed_ticks < target_ticks)
-        // {
-        //     vTaskDelay(target_ticks - elapsed_ticks);
-        // }
+        // Pace sends to match audio production rate.
+        // Calculate how long this chunk represents in real-time, then wait
+        // the remaining duration after subtracting time already spent on
+        // the read+send. This prevents burst-drain-starve buffer oscillation.
+        // Use send_bytes / byte_rate since both reflect the same bit-depth.
+        TickType_t target_ticks = pdMS_TO_TICKS((send_bytes * 1000) / byte_rate);
+        if (target_ticks < 1) target_ticks = 1;
+        TickType_t elapsed_ticks = xTaskGetTickCount() - iter_start;
+        if (elapsed_ticks < target_ticks)
+        {
+            vTaskDelay(target_ticks - elapsed_ticks);
+        }
     }
 
     // Clean up client connection
@@ -688,6 +702,7 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
     ctx->req = async_req;
     ctx->client_id = client_id;
+    ctx->is_24bit = false;
 
     // Spawn streaming task on Core 1 (network core)
     char task_name[16];
@@ -716,6 +731,118 @@ static esp_err_t stream_handler(httpd_req_t *req)
 
     // Return immediately - worker thread is now free for other requests
     ESP_LOGI(TAG, "Stream handler returning, client %d now served by async task", client_id);
+    return ESP_OK;
+}
+
+// Stream handler for /stream24.wav endpoint - 24-bit native resolution
+static esp_err_t stream_24bit_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "New 24-bit stream request from client");
+
+    int client_id = find_free_slot();
+    if (client_id < 0)
+    {
+        ESP_LOGW(TAG, "Max clients reached, rejecting connection");
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_hdr(req, "Retry-After", "5");
+        httpd_resp_sendstr(req, "Maximum clients reached. Please try again later.");
+        return ESP_OK;
+    }
+
+    if (!AudioBuffer::register_client(client_id))
+    {
+        ESP_LOGE(TAG, "Failed to register client %d with audio buffer", client_id);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    clients[client_id].is_active = true;
+    clients[client_id].socket_fd = httpd_req_to_sockfd(req);
+    clients[client_id].bytes_sent = 0;
+    clients[client_id].underrun_count = 0;
+    clients[client_id].connected_at = esp_timer_get_time();
+
+    ESP_LOGI(TAG, "Client %d connected for 24-bit stream (socket fd: %d)", client_id, clients[client_id].socket_fd);
+
+    int fd = httpd_req_to_sockfd(req);
+    int nodelay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+    // Build and send 24-bit WAV header
+    WavHeader wav_header;
+    StreamHandler::build_wav_header_24bit(&wav_header, current_sample_rate);
+
+    httpd_resp_set_type(req, "audio/wav");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    if (httpd_resp_send_chunk(req, (const char *)&wav_header, sizeof(WavHeader)) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to send WAV header to client %d", client_id);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    clients[client_id].bytes_sent += sizeof(WavHeader);
+
+    httpd_req_t *async_req = nullptr;
+    esp_err_t err = httpd_req_async_handler_begin(req, &async_req);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to create async handler for client %d: %d", client_id, err);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    StreamTaskContext *ctx = (StreamTaskContext *)malloc(sizeof(StreamTaskContext));
+    if (ctx == nullptr)
+    {
+        ESP_LOGE(TAG, "Failed to allocate context for client %d", client_id);
+        httpd_req_async_handler_complete(async_req);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    ctx->req = async_req;
+    ctx->client_id = client_id;
+    ctx->is_24bit = true;
+
+    char task_name[16];
+    snprintf(task_name, sizeof(task_name), "stream24_%d", client_id);
+    BaseType_t result = xTaskCreatePinnedToCore(
+        stream_task,
+        task_name,
+        16384,
+        ctx,
+        6,
+        nullptr,
+        1
+    );
+
+    if (result != pdPASS)
+    {
+        ESP_LOGE(TAG, "Failed to create streaming task for client %d", client_id);
+        httpd_req_async_handler_complete(async_req);
+        free(ctx);
+        AudioBuffer::unregister_client(client_id);
+        clients[client_id].is_active = false;
+        clients[client_id].socket_fd = -1;
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "24-bit stream handler returning, client %d now served by async task", client_id);
     return ESP_OK;
 }
 
@@ -972,6 +1099,20 @@ bool HTTPServer::init(uint16_t port, uint32_t sample_rate)
     if (httpd_register_uri_handler(server, &stream_wav_uri) != ESP_OK)
     {
         ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /stream.wav URI");
+        httpd_stop(server);
+        server = nullptr;
+        return false;
+    }
+
+    // Register 24-bit stream URI handler
+    httpd_uri_t stream_24bit_uri = {
+        .uri = "/stream24.wav",
+        .method = HTTP_GET,
+        .handler = stream_24bit_handler,
+        .user_ctx = nullptr};
+    if (httpd_register_uri_handler(server, &stream_24bit_uri) != ESP_OK)
+    {
+        ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /stream24.wav URI");
         httpd_stop(server);
         server = nullptr;
         return false;

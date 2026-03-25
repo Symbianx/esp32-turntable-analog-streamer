@@ -75,14 +75,14 @@ bool AudioBuffer::write(const uint8_t *data, size_t size)
         if (client_active[client_id].load(std::memory_order_acquire)) {
             uint32_t rp = read_pos[client_id].load(std::memory_order_acquire);
             
-            // Calculate distance between write and read pointers
-            uint32_t distance = (wp >= rp) ? (wp - rp) : (RING_BUFFER_SIZE - rp + wp);
+            // Calculate how much data is available (distance from reader to writer)
+            uint32_t available = (wp >= rp) ? (wp - rp) : (RING_BUFFER_SIZE - rp + wp);
             
-            // Warn when writer is about to lap reader (< 5% buffer remaining)
-            uint32_t pct = (distance * 100) / RING_BUFFER_SIZE;
-            if (pct < 5) {
+            // Overrun: writer about to lap reader (> 95% of buffer full)
+            uint32_t fill_pct = (available * 100) / RING_BUFFER_SIZE;
+            if (fill_pct > 95) {
                 if (log_throttle[client_id]++ % 5000 == 0) {
-                    ESP_LOGW(TAG, "Client %d buffer low (%u%%)", client_id, pct);
+                    ESP_LOGW(TAG, "Client %d overrun risk (%u%% full)", client_id, fill_pct);
                 }
                 overrun_count++;
             } else {

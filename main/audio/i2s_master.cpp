@@ -21,7 +21,7 @@ constexpr gpio_num_t DIN_GPIO = GPIO_NUM_17;   // DOUT ← PCM1808 DOUT
 
 // DMA configuration (must be multiples of 3 for 24-bit)
 constexpr uint32_t DMA_FRAME_NUM = 240;  // 240 frames per descriptor
-constexpr uint32_t DMA_DESC_NUM = 6;     // 6 descriptors
+constexpr uint32_t DMA_DESC_NUM = 8;     // 8 descriptors (~40ms at 48kHz for more scheduling resilience)
 
 static i2s_chan_handle_t rx_handle = nullptr;
 static uint32_t current_sample_rate = 48000;

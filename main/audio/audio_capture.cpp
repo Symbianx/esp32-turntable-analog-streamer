@@ -104,14 +104,26 @@ static void audio_capture_task(void *params)
         size_t converted_size = frames * 6;
         
         read_count++;
-        if (read_count == 1 || read_count % 5000 == 0) {
-            // Log less frequently - every 25 seconds
-            // Show both raw DMA buffer and converted buffer for diagnostics
-            ESP_LOGI(TAG, "Audio capture: %lu chunks, %llu frames. Raw DMA: %02X %02X %02X %02X %02X %02X %02X %02X, Converted: %02X %02X %02X",
-                     read_count, total_frames_captured.load(),
+        if (read_count == 1) {
+            // First chunk: detailed byte-order verification diagnostic
+            // DMA layout (little-endian ESP32): [pad] [data_LSB] [data_mid] [data_MSB] per channel
+            // Converted WAV layout (little-endian): [LSB] [mid] [MSB] per channel
+            int32_t left_raw = dma_buffer[1] | (dma_buffer[2] << 8) | (dma_buffer[3] << 16);
+            if (left_raw & 0x800000) left_raw |= 0xFF000000;
+            int32_t right_raw = dma_buffer[5] | (dma_buffer[6] << 8) | (dma_buffer[7] << 16);
+            if (right_raw & 0x800000) right_raw |= 0xFF000000;
+            ESP_LOGI(TAG, "Byte-order check — Raw DMA[0..7]: %02X %02X %02X %02X | %02X %02X %02X %02X",
                      dma_buffer[0], dma_buffer[1], dma_buffer[2], dma_buffer[3],
-                     dma_buffer[4], dma_buffer[5], dma_buffer[6], dma_buffer[7],
-                     converted_buffer[0], converted_buffer[1], converted_buffer[2]);
+                     dma_buffer[4], dma_buffer[5], dma_buffer[6], dma_buffer[7]);
+            ESP_LOGI(TAG, "  Decoded L=%d R=%d (pad bytes: L=%02X R=%02X, expect ~00)",
+                     left_raw, right_raw, dma_buffer[0], dma_buffer[4]);
+            ESP_LOGI(TAG, "  Converted WAV[0..5]: %02X %02X %02X | %02X %02X %02X",
+                     converted_buffer[0], converted_buffer[1], converted_buffer[2],
+                     converted_buffer[3], converted_buffer[4], converted_buffer[5]);
+        }
+        if (read_count == 1 || read_count % 5000 == 0) {
+            ESP_LOGI(TAG, "Audio capture: %lu chunks, %llu frames",
+                     read_count, total_frames_captured.load());
         }
         
         // Write converted 24-bit data to ring buffer
