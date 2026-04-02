@@ -1212,6 +1212,7 @@ static esp_err_t eq_settings_page_handler(httpd_req_t *req) {
 }
 
 
+bool HTTPServer::init(uint16_t port, uint32_t sample_rate)
 {
     if (server != nullptr)
     {
