@@ -6,6 +6,7 @@
 #include "../audio/audio_buffer.h"
 #include "../audio/audio_capture.h"
 #include "../audio/i2s_master.h"
+#include "../audio/eq_processor.h"
 #include "../system/error_handler.h"
 #include "../system/task_manager.h"
 #include "../network/wifi_manager.h"
@@ -14,6 +15,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "mqtt_client.h"
+#include "cJSON.h"
 #include "freertos/event_groups.h"
 #include <cstring>
 #include <cstdio>
@@ -748,7 +750,7 @@ static esp_err_t send_status_json(httpd_req_t *req, const char *ip, uint32_t sr,
     char stream_url[96];
     build_stream_url(ip, stream_url, sizeof(stream_url));
 
-    char json[768];
+    char json[900];
     int len = snprintf(json, sizeof(json),
         "{\"audio\":{\"sample_rate\":%u,\"bit_depth\":24,\"channels\":2,"
         "\"buffer_fill_pct\":%.1f,\"total_frames\":%llu,"
@@ -758,6 +760,7 @@ static esp_err_t send_status_json(httpd_req_t *req, const char *ip, uint32_t sr,
         "\"cpu_core0_pct\":%u,\"cpu_core1_pct\":%u,"
         "\"heap_free_bytes\":%u,\"heap_min_free_bytes\":%u},"
         "\"mqtt\":{\"enabled\":%s,\"connected\":%s,\"broker\":\"%s\",\"last_state\":\"%s\"},"
+        "\"eq\":{\"enabled\":%s,\"active_bands\":%u},"
         "\"network\":{\"wifi_connected\":%s,\"rssi_dbm\":%d,"
         "\"ip_address\":\"%s\",\"active_clients\":%u,"
         "\"stream_url\":\"%s\"}}",
@@ -765,6 +768,7 @@ static esp_err_t send_status_json(httpd_req_t *req, const char *ip, uint32_t sr,
         clipping ? "true" : "false", streaming ? "true" : "false",
         uptime, cpu0, cpu1, heap_free, heap_min,
         mqtt_enabled ? "true" : "false", mqtt_connected ? "true" : "false", mqtt_broker, mqtt_state,
+        EQProcessor::is_enabled() ? "true" : "false", (unsigned)EQProcessor::active_band_count(),
         wifi ? "true" : "false", rssi, ip, num_clients, stream_url);
 
     httpd_resp_send(req, json, len);
@@ -803,7 +807,7 @@ static esp_err_t send_status_html(httpd_req_t *req, const char *ip, uint32_t sr,
         ".url{background:#0d1b2a;padding:8px;border-radius:4px;font-family:monospace;font-size:12px;word-break:break-all;margin-top:4px}"
         ".ft{text-align:center;font-size:11px;color:#555;margin-top:8px}.nav{display:flex;gap:8px;margin-bottom:12px}.btn{display:inline-block;padding:8px 10px;border-radius:6px;background:#0f969c;color:#fff;text-decoration:none;font-size:12px}"
         "</style></head><body>"
-        "<h1>&#127925; ESP32 Audio Streamer</h1><div class='nav'><a class='btn' href='/mqtt-settings'>MQTT Settings</a><a class='btn' href='/stream'>Open Stream</a></div>");
+        "<h1>&#127925; ESP32 Audio Streamer</h1><div class='nav'><a class='btn' href='/mqtt-settings'>MQTT Settings</a><a class='btn' href='/eq-settings'>EQ Settings</a><a class='btn' href='/stream'>Open Stream</a></div>");
 
     char buf[384];
 
@@ -919,7 +923,295 @@ static esp_err_t status_handler(httpd_req_t *req)
         num_clients, uptime, mqtt_enabled, mqtt_connected, mqtt_broker, mqtt_state);
 }
 
-bool HTTPServer::init(uint16_t port, uint32_t sample_rate)
+// ─── EQ Handlers ─────────────────────────────────────────────────────────────
+
+// Helper: serialize current EQ state to a JSON string in the provided buffer.
+// Returns the number of characters written (like snprintf).
+static int build_eq_json(char *buf, size_t buf_len) {
+    DeviceConfig config;
+    load_config_or_defaults(&config);
+
+    int pos = snprintf(buf, buf_len,
+        "{\"eq_enabled\":%s,\"sample_rate\":%lu,\"bands\":[",
+        config.eq_enabled ? "true" : "false",
+        (unsigned long)current_sample_rate);
+
+    for (int b = 0; b < 10 && pos < (int)buf_len - 2; b++) {
+        const EQBandConfig& band = config.eq_bands[b];
+        pos += snprintf(buf + pos, buf_len - pos,
+            "%s{\"index\":%d,\"enabled\":%s,\"filter_type\":\"%s\","
+            "\"frequency_hz\":%.1f,\"gain_db\":%.2f,\"q_factor\":%.3f}",
+            b == 0 ? "" : ",",
+            b,
+            band.enabled ? "true" : "false",
+            eq_filter_type_to_str(band.filter_type),
+            band.frequency_hz,
+            band.gain_db,
+            band.q_factor);
+    }
+
+    if (pos < (int)buf_len - 2) {
+        pos += snprintf(buf + pos, buf_len - pos, "]}");
+    }
+    return pos;
+}
+
+// GET /eq — return current EQ configuration as JSON
+static esp_err_t eq_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/json");
+    add_cors_headers(req);
+
+    char json[1200];
+    int len = build_eq_json(json, sizeof(json));
+    return httpd_resp_send(req, json, len);
+}
+
+// POST /eq — partial update of EQ settings (JSON body), apply immediately, persist to NVS
+static esp_err_t eq_post_handler(httpd_req_t *req) {
+    if (req->content_len <= 0 || req->content_len > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body size");
+        return ESP_FAIL;
+    }
+
+    char *body = (char *)malloc(req->content_len + 1);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    int received = httpd_req_recv(req, body, req->content_len);
+    if (received <= 0) {
+        free(body);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to read body");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    DeviceConfig config;
+    load_config_or_defaults(&config);
+
+    // Apply master enable if present
+    cJSON *eq_enabled = cJSON_GetObjectItem(root, "eq_enabled");
+    if (cJSON_IsBool(eq_enabled)) {
+        bool new_enabled = cJSON_IsTrue(eq_enabled);
+        config.eq_enabled = new_enabled;
+        EQProcessor::set_enabled(new_enabled);
+    }
+
+    // Apply band updates if present
+    cJSON *bands = cJSON_GetObjectItem(root, "bands");
+    if (cJSON_IsArray(bands)) {
+        cJSON *band_obj = nullptr;
+        cJSON_ArrayForEach(band_obj, bands) {
+            cJSON *idx_j = cJSON_GetObjectItem(band_obj, "index");
+            if (!cJSON_IsNumber(idx_j)) continue;
+            int idx = (int)idx_j->valuedouble;
+            if (idx < 0 || idx >= 10) {
+                cJSON_Delete(root);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Band index out of range [0,9]");
+                return ESP_FAIL;
+            }
+
+            EQBandConfig& band = config.eq_bands[idx];
+
+            cJSON *j_en = cJSON_GetObjectItem(band_obj, "enabled");
+            if (cJSON_IsBool(j_en)) band.enabled = cJSON_IsTrue(j_en);
+
+            cJSON *j_type = cJSON_GetObjectItem(band_obj, "filter_type");
+            if (cJSON_IsString(j_type)) band.filter_type = eq_filter_type_from_str(j_type->valuestring);
+
+            cJSON *j_freq = cJSON_GetObjectItem(band_obj, "frequency_hz");
+            if (cJSON_IsNumber(j_freq)) {
+                float f = (float)j_freq->valuedouble;
+                band.frequency_hz = f < 20.0f ? 20.0f : (f > 20000.0f ? 20000.0f : f);
+            }
+
+            cJSON *j_gain = cJSON_GetObjectItem(band_obj, "gain_db");
+            if (cJSON_IsNumber(j_gain)) {
+                float g = (float)j_gain->valuedouble;
+                band.gain_db = g < -24.0f ? -24.0f : (g > 24.0f ? 24.0f : g);
+            }
+
+            cJSON *j_q = cJSON_GetObjectItem(band_obj, "q_factor");
+            if (cJSON_IsNumber(j_q)) {
+                float q = (float)j_q->valuedouble;
+                band.q_factor = q < 0.1f ? 0.1f : (q > 10.0f ? 10.0f : q);
+            }
+
+            EQProcessor::update_band((uint8_t)idx, band, current_sample_rate);
+        }
+    }
+    cJSON_Delete(root);
+
+    if (!NVSConfig::save(&config)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save config");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    add_cors_headers(req);
+    char json[1200];
+    int len = build_eq_json(json, sizeof(json));
+    return httpd_resp_send(req, json, len);
+}
+
+// POST /eq/reset — reset all EQ bands to flat factory defaults
+static esp_err_t eq_reset_handler(httpd_req_t *req) {
+    // Load current config to preserve WiFi/MQTT settings, then reset only EQ fields
+    DeviceConfig config;
+    load_config_or_defaults(&config);
+
+    config.eq_enabled = false;
+    const struct { EQFilterType type; float freq; float q; } defaults[10] = {
+        { EQFilterType::LOW_SHELF,  32.0f,    0.707f },
+        { EQFilterType::PEAKING,    64.0f,    1.4f   },
+        { EQFilterType::PEAKING,   125.0f,    1.4f   },
+        { EQFilterType::PEAKING,   250.0f,    1.4f   },
+        { EQFilterType::PEAKING,   500.0f,    1.4f   },
+        { EQFilterType::PEAKING,  1000.0f,    1.4f   },
+        { EQFilterType::PEAKING,  2000.0f,    1.4f   },
+        { EQFilterType::PEAKING,  4000.0f,    1.4f   },
+        { EQFilterType::PEAKING,  8000.0f,    1.4f   },
+        { EQFilterType::HIGH_SHELF, 16000.0f, 0.707f },
+    };
+    for (int i = 0; i < 10; i++) {
+        config.eq_bands[i] = { false, defaults[i].type, defaults[i].freq, 0.0f, defaults[i].q };
+    }
+
+    EQProcessor::init(config, current_sample_rate);
+
+    if (!NVSConfig::save(&config)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save config");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    add_cors_headers(req);
+    char json[1200];
+    int len = build_eq_json(json, sizeof(json));
+    return httpd_resp_send(req, json, len);
+}
+
+// GET /eq-settings — HTML EQ editor page
+static esp_err_t eq_settings_page_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+
+    httpd_resp_sendstr_chunk(req,
+        "<!DOCTYPE html><html><head>"
+        "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>EQ Settings</title>"
+        "<style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font-family:system-ui,sans-serif;max-width:760px;margin:0 auto;padding:12px;background:#1a1a2e;color:#e0e0e0}"
+        "h1{font-size:18px;margin-bottom:12px;color:#fff}"
+        ".c{background:#16213e;border-radius:8px;padding:12px;margin-bottom:10px}"
+        ".c h2{font-size:14px;color:#0f969c;margin-bottom:10px;border-bottom:1px solid #1a1a3e;padding-bottom:4px}"
+        "table{width:100%;border-collapse:collapse;font-size:13px}"
+        "th{text-align:left;padding:4px 6px;color:#888;font-weight:normal;border-bottom:1px solid #1a1a3e}"
+        "td{padding:4px 6px;vertical-align:middle}"
+        "input[type=number],select{background:#0d1b2a;color:#e0e0e0;border:1px solid #0f969c;border-radius:4px;padding:4px 6px;width:100%;font-size:12px}"
+        "input[type=range]{width:100%;accent-color:#0f969c}"
+        "input[type=checkbox]{width:16px;height:16px;accent-color:#0f969c;cursor:pointer}"
+        ".gain-val{color:#0f969c;font-weight:bold;min-width:42px;display:inline-block;text-align:right}"
+        ".btn{display:inline-block;padding:8px 16px;border-radius:6px;border:none;background:#0f969c;color:#fff;cursor:pointer;font-size:14px;margin-right:8px}"
+        ".btn.danger{background:#b91c1c}.btn.alt{background:#4b5563}"
+        ".nav{display:flex;gap:8px;margin-bottom:12px}"
+        "a.btn{text-decoration:none}"
+        "#toast{display:none;padding:8px 16px;border-radius:6px;margin-top:10px;font-size:13px}"
+        ".ok-toast{background:#14532d;color:#86efac}.err-toast{background:#450a0a;color:#fca5a5}"
+        "</style></head><body>"
+        "<h1>&#127932; Parametric Equalizer</h1>"
+        "<div class='nav'>"
+        "<a class='btn alt' href='/status'>&#8592; Status</a>"
+        "<a class='btn alt' href='/mqtt-settings'>MQTT Settings</a>"
+        "</div>");
+
+    httpd_resp_sendstr_chunk(req,
+        "<div class='c'>"
+        "<h2>Master Control</h2>"
+        "<label style='font-size:14px;cursor:pointer'>"
+        "<input type='checkbox' id='eq_enabled' style='margin-right:8px'>"
+        "Enable EQ</label>"
+        "</div>"
+        "<div class='c'>"
+        "<h2>EQ Bands</h2>"
+        "<table>"
+        "<thead><tr>"
+        "<th>On</th><th>Band</th><th>Type</th>"
+        "<th>Freq (Hz)</th><th>Gain (dB)</th><th style='min-width:120px'>Gain Slider</th><th>Q</th>"
+        "</tr></thead><tbody id='bands'></tbody>"
+        "</table></div>"
+        "<div>"
+        "<button class='btn' onclick='applyEQ()'>&#10003; Apply</button>"
+        "<button class='btn danger' onclick='resetEQ()'>Reset to Flat</button>"
+        "</div>"
+        "<div id='toast'></div>");
+
+    // Inline JavaScript
+    httpd_resp_sendstr_chunk(req,
+        "<script>"
+        "const FILTER_TYPES=['PEAKING','LOW_SHELF','HIGH_SHELF','LOW_PASS','HIGH_PASS'];"
+        "let currentBands=[];"
+        "function toast(msg,ok){"
+        "const t=document.getElementById('toast');"
+        "t.textContent=msg;t.className=ok?'ok-toast':'err-toast';"
+        "t.style.display='block';setTimeout(()=>t.style.display='none',3000);}"
+        "function buildRow(b){"
+        "const tr=document.createElement('tr');tr.id='row'+b.index;"
+        "const freqLabel=['32','64','125','250','500','1k','2k','4k','8k','16k'][b.index]||b.index;"
+        "const gainDisabled=(b.filter_type==='LOW_PASS'||b.filter_type==='HIGH_PASS')?'disabled':'';"
+        "tr.innerHTML=`"
+        "<td><input type='checkbox' id='en${b.index}' ${b.enabled?'checked':''}></td>"
+        "<td style='color:#888'>${freqLabel}</td>"
+        "<td><select id='type${b.index}'>${FILTER_TYPES.map(t=>`<option value='${t}'${t===b.filter_type?' selected':''}>${t}</option>`).join('')}</select></td>"
+        "<td><input type='number' id='freq${b.index}' min='20' max='20000' step='1' value='${b.frequency_hz.toFixed(0)}'></td>"
+        "<td><span class='gain-val' id='gainv${b.index}'>${b.gain_db.toFixed(1)}</span></td>"
+        "<td><input type='range' id='gain${b.index}' min='-24' max='24' step='0.5' value='${b.gain_db}' ${gainDisabled}"
+        " oninput=\"document.getElementById('gainv${b.index}').textContent=parseFloat(this.value).toFixed(1)\"></td>"
+        "<td><input type='number' id='q${b.index}' min='0.1' max='10' step='0.05' value='${b.q_factor.toFixed(3)}'></td>"
+        "`;tr.querySelector('#type'+b.index).addEventListener('change',function(){"
+        "const isFlat=this.value==='LOW_PASS'||this.value==='HIGH_PASS';"
+        "document.getElementById('gain'+b.index).disabled=isFlat;"
+        "});return tr;}"
+        "function loadEQ(){"
+        "fetch('/eq').then(r=>r.json()).then(data=>{"
+        "document.getElementById('eq_enabled').checked=data.eq_enabled;"
+        "currentBands=data.bands;"
+        "const tbody=document.getElementById('bands');"
+        "tbody.innerHTML='';"
+        "data.bands.forEach(b=>tbody.appendChild(buildRow(b)));"
+        "}).catch(()=>toast('Failed to load EQ config',false));}"
+        "function applyEQ(){"
+        "const bands=currentBands.map(b=>({index:b.index,"
+        "enabled:document.getElementById('en'+b.index).checked,"
+        "filter_type:document.getElementById('type'+b.index).value,"
+        "frequency_hz:parseFloat(document.getElementById('freq'+b.index).value)||b.frequency_hz,"
+        "gain_db:parseFloat(document.getElementById('gain'+b.index).value)||0,"
+        "q_factor:parseFloat(document.getElementById('q'+b.index).value)||b.q_factor}));"
+        "const payload=JSON.stringify({eq_enabled:document.getElementById('eq_enabled').checked,bands});"
+        "fetch('/eq',{method:'POST',headers:{'Content-Type':'application/json'},body:payload})"
+        ".then(r=>r.json()).then(()=>toast('EQ settings applied',true))"
+        ".catch(()=>toast('Failed to apply EQ',false));}"
+        "function resetEQ(){"
+        "if(!confirm('Reset all EQ bands to flat (0 dB)?'))return;"
+        "fetch('/eq/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})"
+        ".then(r=>r.json()).then(()=>{toast('EQ reset to flat',true);loadEQ();})"
+        ".catch(()=>toast('Reset failed',false));}"
+        "loadEQ();"
+        "</script></body></html>");
+
+    httpd_resp_sendstr_chunk(req, nullptr);
+    return ESP_OK;
+}
+
+
 {
     if (server != nullptr)
     {
@@ -936,7 +1228,7 @@ bool HTTPServer::init(uint16_t port, uint32_t sample_rate)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = port;
     config.max_open_sockets = 4; // 3 streaming + 1 for status/config
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.lru_purge_enable = true;
     config.stack_size = 16384;  // Increased for larger audio chunks
     config.send_wait_timeout = 5;  // Allow time for WiFi congestion
@@ -1051,6 +1343,59 @@ bool HTTPServer::init(uint16_t port, uint32_t sample_rate)
     if (httpd_register_uri_handler(server, &audio_level_uri) != ESP_OK)
     {
         ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /api/audio-level URI");
+        httpd_stop(server);
+        server = nullptr;
+        return false;
+    }
+
+    // EQ endpoints
+    httpd_uri_t eq_settings_uri = {
+        .uri = "/eq-settings",
+        .method = HTTP_GET,
+        .handler = eq_settings_page_handler,
+        .user_ctx = nullptr};
+    if (httpd_register_uri_handler(server, &eq_settings_uri) != ESP_OK)
+    {
+        ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /eq-settings URI");
+        httpd_stop(server);
+        server = nullptr;
+        return false;
+    }
+
+    httpd_uri_t eq_get_uri = {
+        .uri = "/eq",
+        .method = HTTP_GET,
+        .handler = eq_get_handler,
+        .user_ctx = nullptr};
+    if (httpd_register_uri_handler(server, &eq_get_uri) != ESP_OK)
+    {
+        ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /eq GET URI");
+        httpd_stop(server);
+        server = nullptr;
+        return false;
+    }
+
+    httpd_uri_t eq_post_uri = {
+        .uri = "/eq",
+        .method = HTTP_POST,
+        .handler = eq_post_handler,
+        .user_ctx = nullptr};
+    if (httpd_register_uri_handler(server, &eq_post_uri) != ESP_OK)
+    {
+        ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /eq POST URI");
+        httpd_stop(server);
+        server = nullptr;
+        return false;
+    }
+
+    httpd_uri_t eq_reset_uri = {
+        .uri = "/eq/reset",
+        .method = HTTP_POST,
+        .handler = eq_reset_handler,
+        .user_ctx = nullptr};
+    if (httpd_register_uri_handler(server, &eq_reset_uri) != ESP_OK)
+    {
+        ErrorHandler::log_error(ErrorType::HTTP_ERROR, "Failed to register /eq/reset URI");
         httpd_stop(server);
         server = nullptr;
         return false;

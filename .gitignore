@@ -58,3 +58,4 @@ Thumbs.db
 .copilot/
 
 managed_components/
+.vscode\c_cpp_properties.json

@@ -1,6 +1,7 @@
 #include "audio_capture.h"
 #include "i2s_master.h"
 #include "audio_buffer.h"
+#include "eq_processor.h"
 #include "../system/error_handler.h"
 #include "../system/watchdog.h"
 #include "esp_log.h"
@@ -82,24 +83,26 @@ static void audio_capture_task(void *params)
         
         last_good_read = esp_timer_get_time();
         
-        // Convert from 32-bit I²S slots to 24-bit packed WAV format
-        // ESP32 I²S reads: [L_byte0 L_byte1 L_byte2 L_byte3] [R_byte0 R_byte1 R_byte2 R_byte3]
-        // 24-bit data is in upper 3 bytes (MSB-aligned): [XX L2 L1 L0] [XX R2 R1 R0]
-        // WAV needs: [L0 L1 L2] [R0 R1 R2]
+        // Convert from 32-bit I²S slots to 24-bit packed WAV format.
+        // EQProcessor::process() handles both the conversion and biquad filtering.
+        // If EQ is disabled or no bands are active it returns false and we fall
+        // back to the original bit-packing path — zero cost when bypassed.
         size_t frames = bytes_read / 8;  // 8 bytes per stereo frame
-        for (size_t i = 0; i < frames; i++) {
-            size_t src_idx = i * 8;
-            size_t dst_idx = i * 6;
-            
-            // Left channel: bytes 1,2,3 of 32-bit word (MSB-aligned 24-bit)
-            converted_buffer[dst_idx + 0] = dma_buffer[src_idx + 1];  // L0
-            converted_buffer[dst_idx + 1] = dma_buffer[src_idx + 2];  // L1
-            converted_buffer[dst_idx + 2] = dma_buffer[src_idx + 3];  // L2
-            
-            // Right channel: bytes 5,6,7 of 32-bit word (MSB-aligned 24-bit)
-            converted_buffer[dst_idx + 3] = dma_buffer[src_idx + 5];  // R0
-            converted_buffer[dst_idx + 4] = dma_buffer[src_idx + 6];  // R1
-            converted_buffer[dst_idx + 5] = dma_buffer[src_idx + 7];  // R2
+
+        if (!EQProcessor::process(dma_buffer, converted_buffer, frames)) {
+            // EQ bypassed: use legacy 32-bit slot → 24-bit packed conversion
+            // ESP32 I²S reads: [L_byte0 L_byte1 L_byte2 L_byte3] [R_byte0 R_byte1 R_byte2 R_byte3]
+            // 24-bit data is in upper 3 bytes (MSB-aligned): [XX L2 L1 L0] [XX R2 R1 R0]
+            for (size_t i = 0; i < frames; i++) {
+                size_t src_idx = i * 8;
+                size_t dst_idx = i * 6;
+                converted_buffer[dst_idx + 0] = dma_buffer[src_idx + 1];  // L0
+                converted_buffer[dst_idx + 1] = dma_buffer[src_idx + 2];  // L1
+                converted_buffer[dst_idx + 2] = dma_buffer[src_idx + 3];  // L2
+                converted_buffer[dst_idx + 3] = dma_buffer[src_idx + 5];  // R0
+                converted_buffer[dst_idx + 4] = dma_buffer[src_idx + 6];  // R1
+                converted_buffer[dst_idx + 5] = dma_buffer[src_idx + 7];  // R2
+            }
         }
         size_t converted_size = frames * 6;
         

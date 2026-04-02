@@ -147,7 +147,7 @@ bool NVSConfig::load_factory_defaults(DeviceConfig *config)
     }
     
     // Initialize with factory defaults
-    config->version = 1;
+    config->version = DeviceConfig::SCHEMA_VERSION;
     strncpy(config->wifi_ssid, "", sizeof(config->wifi_ssid));
     strncpy(config->wifi_password, "", sizeof(config->wifi_password));
     config->sample_rate = DeviceConfig::DEFAULT_SAMPLE_RATE;
@@ -165,6 +165,22 @@ bool NVSConfig::load_factory_defaults(DeviceConfig *config)
     config->mqtt_use_tls = false;
     config->audio_threshold_db = DeviceConfig::DEFAULT_AUDIO_THRESHOLD_DB;
     
+    // EQ factory defaults (flat, all bands disabled)
+    config->eq_enabled = false;
+    // Band 0: Low shelf  @ 32 Hz,  Q=0.707
+    config->eq_bands[0] = { false, EQFilterType::LOW_SHELF,  32.0f,   0.0f, 0.707f };
+    // Bands 1-8: Peaking @ standard octave centers, Q=1.4
+    config->eq_bands[1] = { false, EQFilterType::PEAKING,    64.0f,   0.0f, 1.4f   };
+    config->eq_bands[2] = { false, EQFilterType::PEAKING,   125.0f,   0.0f, 1.4f   };
+    config->eq_bands[3] = { false, EQFilterType::PEAKING,   250.0f,   0.0f, 1.4f   };
+    config->eq_bands[4] = { false, EQFilterType::PEAKING,   500.0f,   0.0f, 1.4f   };
+    config->eq_bands[5] = { false, EQFilterType::PEAKING,  1000.0f,   0.0f, 1.4f   };
+    config->eq_bands[6] = { false, EQFilterType::PEAKING,  2000.0f,   0.0f, 1.4f   };
+    config->eq_bands[7] = { false, EQFilterType::PEAKING,  4000.0f,   0.0f, 1.4f   };
+    config->eq_bands[8] = { false, EQFilterType::PEAKING,  8000.0f,   0.0f, 1.4f   };
+    // Band 9: High shelf @ 16 kHz, Q=0.707
+    config->eq_bands[9] = { false, EQFilterType::HIGH_SHELF, 16000.0f, 0.0f, 0.707f };
+
     config->crc32 = 0;
     
     ESP_LOGI(TAG, "Factory defaults loaded");

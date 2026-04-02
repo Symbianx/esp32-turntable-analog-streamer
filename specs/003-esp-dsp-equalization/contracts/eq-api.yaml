@@ -1,0 +1,231 @@
+openapi: "3.0.3"
+info:
+  title: ESP32 Turntable Streamer — EQ API
+  description: |
+    Parametric equalizer configuration endpoints for the ESP32 turntable audio streamer.
+    All endpoints are served by the existing HTTP server on the device's configured port (default: 8080).
+    Changes are applied immediately to the live audio path and persisted to NVS.
+  version: "1.0.0"
+
+servers:
+  - url: "http://{device_ip}:{port}"
+    variables:
+      device_ip:
+        default: "192.168.1.100"
+        description: Device IP address (see mDNS name or /status endpoint)
+      port:
+        default: "8080"
+        description: HTTP port (configured in device settings)
+
+paths:
+  /eq:
+    get:
+      summary: Get EQ configuration
+      description: Returns the current equalizer configuration including master enable state and all 10 band parameters.
+      operationId: getEQ
+      responses:
+        "200":
+          description: Current EQ configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EQStatusResponse"
+              example:
+                eq_enabled: true
+                sample_rate: 48000
+                bands:
+                  - index: 0
+                    enabled: true
+                    filter_type: "LOW_SHELF"
+                    frequency_hz: 32.0
+                    gain_db: 0.0
+                    q_factor: 0.707
+                  - index: 5
+                    enabled: true
+                    filter_type: "PEAKING"
+                    frequency_hz: 1000.0
+                    gain_db: -3.0
+                    q_factor: 1.4
+                  - index: 9
+                    enabled: true
+                    filter_type: "HIGH_SHELF"
+                    frequency_hz: 16000.0
+                    gain_db: 2.0
+                    q_factor: 0.707
+
+    post:
+      summary: Update EQ configuration
+      description: |
+        Updates the equalizer configuration. Partial updates are supported — only the fields present
+        in the request body are changed. Changes are applied immediately to the audio path and
+        persisted to NVS. All band parameter values are clamped to valid ranges on receipt.
+      operationId: updateEQ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EQUpdateRequest"
+            examples:
+              enable_eq:
+                summary: Enable EQ master switch
+                value:
+                  eq_enabled: true
+              update_one_band:
+                summary: Update a single band
+                value:
+                  bands:
+                    - index: 3
+                      enabled: true
+                      filter_type: "PEAKING"
+                      frequency_hz: 250.0
+                      gain_db: 4.0
+                      q_factor: 1.2
+              full_config:
+                summary: Set full EQ configuration
+                value:
+                  eq_enabled: true
+                  bands:
+                    - index: 0
+                      enabled: true
+                      filter_type: "LOW_SHELF"
+                      frequency_hz: 80.0
+                      gain_db: 3.0
+                      q_factor: 0.707
+                    - index: 9
+                      enabled: true
+                      filter_type: "HIGH_SHELF"
+                      frequency_hz: 12000.0
+                      gain_db: 2.0
+                      q_factor: 0.707
+      responses:
+        "200":
+          description: Configuration applied and persisted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EQStatusResponse"
+        "400":
+          description: Invalid request body (JSON parse error or missing required field)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "Invalid band index: must be 0-9"
+        "500":
+          description: NVS save failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /eq/reset:
+    post:
+      summary: Reset EQ to factory defaults
+      description: |
+        Resets all EQ bands to flat (0 dB gain, all bands disabled) and disables the master EQ switch.
+        Changes are applied immediately to the audio path and persisted to NVS.
+        No request body required.
+      operationId: resetEQ
+      responses:
+        "200":
+          description: EQ reset to factory defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EQStatusResponse"
+        "500":
+          description: NVS save failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    EQFilterType:
+      type: string
+      enum:
+        - PEAKING      # Bell curve boost/cut — use for mid-band parametric control
+        - LOW_SHELF    # Boost/cut all frequencies below corner (gain_db applies)
+        - HIGH_SHELF   # Boost/cut all frequencies above corner (gain_db applies)
+        - LOW_PASS     # Attenuate above corner frequency (gain_db ignored)
+        - HIGH_PASS    # Attenuate below corner frequency (gain_db ignored)
+
+    EQBand:
+      type: object
+      required:
+        - index
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          maximum: 9
+          description: Band slot index (0–9)
+        enabled:
+          type: boolean
+          description: Whether this band is active in the signal chain
+        filter_type:
+          $ref: "#/components/schemas/EQFilterType"
+        frequency_hz:
+          type: number
+          format: float
+          minimum: 20.0
+          maximum: 20000.0
+          description: Center (peaking) or corner (shelf/LPF/HPF) frequency in Hz. Clamped to [20, sample_rate/2 - 1] on the device.
+        gain_db:
+          type: number
+          format: float
+          minimum: -24.0
+          maximum: 24.0
+          description: Boost (+) or cut (-) in dB. Ignored for LOW_PASS and HIGH_PASS types.
+        q_factor:
+          type: number
+          format: float
+          minimum: 0.1
+          maximum: 10.0
+          description: Quality factor — controls bandwidth (peaking) or slope steepness (shelf). Higher = narrower/steeper.
+
+    EQStatusResponse:
+      type: object
+      required:
+        - eq_enabled
+        - sample_rate
+        - bands
+      properties:
+        eq_enabled:
+          type: boolean
+          description: Master EQ enable state. false = audio bypasses all EQ processing.
+        sample_rate:
+          type: integer
+          description: Current audio sample rate in Hz (44100, 48000, or 96000). Affects frequency normalization of active bands.
+        bands:
+          type: array
+          items:
+            $ref: "#/components/schemas/EQBand"
+          minItems: 10
+          maxItems: 10
+          description: All 10 band slots. All slots always returned regardless of enabled state.
+
+    EQUpdateRequest:
+      type: object
+      description: Partial update — only fields present are applied. At least one field is required.
+      properties:
+        eq_enabled:
+          type: boolean
+          description: Set master EQ enable state
+        bands:
+          type: array
+          items:
+            $ref: "#/components/schemas/EQBand"
+          description: List of bands to update. Only listed bands are changed; others are unchanged. Each entry must include `index`.
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error description

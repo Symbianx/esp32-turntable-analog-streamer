@@ -5,6 +5,7 @@ idf_component_register(
         "audio/pcm1808_driver.cpp"
         "audio/audio_capture.cpp"
         "audio/audio_buffer.cpp"
+        "audio/eq_processor.cpp"
         "network/wifi_manager.cpp"
         "network/config_portal.cpp"
         "network/http_server.cpp"
@@ -17,4 +18,7 @@ idf_component_register(
         "system/rgb_led.cpp"
     INCLUDE_DIRS
         "."
+    PRIV_REQUIRES
+        esp-dsp
+        json
 )
