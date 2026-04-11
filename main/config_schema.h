@@ -3,10 +3,31 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
+
+// ─── EQ Types ────────────────────────────────────────────────────────────────
+
+enum class EQFilterType : uint8_t {
+    PEAKING    = 0,  // Bell curve boost/cut — custom AudioEQ Cookbook formula
+    LOW_SHELF  = 1,  // Boost/cut all frequencies below corner
+    HIGH_SHELF = 2,  // Boost/cut all frequencies above corner
+    LOW_PASS   = 3,  // Attenuate above corner (gain_db ignored)
+    HIGH_PASS  = 4,  // Attenuate below corner (gain_db ignored)
+};
+
+struct EQBandConfig {
+    bool        enabled;        // Active in signal chain
+    EQFilterType filter_type;   // Filter shape
+    float       frequency_hz;   // Center/corner frequency (20–20000 Hz)
+    float       gain_db;        // Boost(+) / cut(-) in dB, range [-24, +24]
+    float       q_factor;       // Bandwidth/resonance (0.1–10.0)
+} __attribute__((packed));
+
+// ─── DeviceConfig ─────────────────────────────────────────────────────────────
 
 // DeviceConfig: Persistent device configuration stored in NVS
 struct DeviceConfig {
-    uint8_t version;              // Schema version (1-255)
+    uint8_t version;              // Schema version (bump to force NVS re-init on size change)
     char wifi_ssid[33];           // WiFi station SSID (null-terminated)
     char wifi_password[65];       // WiFi station password (null-terminated)
     uint32_t sample_rate;         // PCM1808 sample rate (44100/48000/96000)
@@ -22,16 +43,23 @@ struct DeviceConfig {
     char mqtt_password[64];       // MQTT password (optional)
     bool mqtt_use_tls;            // Enable TLS/SSL
     float audio_threshold_db;     // Audio detection threshold in dBFS (-60 to -20)
-    
-    uint32_t crc32;               // Integrity checksum
 
-    static constexpr uint32_t DEFAULT_SAMPLE_RATE = 48000;
-    static constexpr uint16_t DEFAULT_HTTP_PORT = 8080;
-    static constexpr uint8_t DEFAULT_MAX_CLIENTS = 3;
+    // EQ Configuration (feature 003)
+    bool eq_enabled;              // Master EQ bypass switch
+    EQBandConfig eq_bands[10];    // Up to 10 parametric EQ bands
+    
+    uint32_t crc32;               // Integrity checksum (covers all fields above)
+
+    static constexpr uint8_t  SCHEMA_VERSION       = 2;  // Bumped for EQ fields
+    static constexpr uint32_t DEFAULT_SAMPLE_RATE  = 48000;
+    static constexpr uint16_t DEFAULT_HTTP_PORT    = 8080;
+    static constexpr uint8_t  DEFAULT_MAX_CLIENTS  = 3;
     static constexpr const char* DEFAULT_DEVICE_NAME = "ESP32-Audio-Stream";
-    static constexpr uint16_t DEFAULT_MQTT_PORT = 1883;
-    static constexpr float DEFAULT_AUDIO_THRESHOLD_DB = -40.0f;
+    static constexpr uint16_t DEFAULT_MQTT_PORT    = 1883;
+    static constexpr float    DEFAULT_AUDIO_THRESHOLD_DB = -40.0f;
 } __attribute__((packed));
+
+// ─── AudioStream ──────────────────────────────────────────────────────────────
 
 // AudioStream: Real-time audio data pipeline state
 struct AudioStream {
@@ -126,6 +154,30 @@ namespace NVSKeys {
     constexpr const char* MQTT_PASSWORD = "mqtt_pass";
     constexpr const char* MQTT_USE_TLS = "mqtt_tls";
     constexpr const char* AUDIO_THRESHOLD_DB = "audio_thresh";
+
+    // EQ Configuration (feature 003) — stored in the DeviceConfig blob, keys unused at runtime
+    constexpr const char* EQ_ENABLED = "eq_enabled";  // stored in blob; key listed for reference
+}
+
+// EQ filter type string helpers (used by HTTP handlers and logging)
+inline const char* eq_filter_type_to_str(EQFilterType t) {
+    switch (t) {
+        case EQFilterType::PEAKING:    return "PEAKING";
+        case EQFilterType::LOW_SHELF:  return "LOW_SHELF";
+        case EQFilterType::HIGH_SHELF: return "HIGH_SHELF";
+        case EQFilterType::LOW_PASS:   return "LOW_PASS";
+        case EQFilterType::HIGH_PASS:  return "HIGH_PASS";
+        default:                       return "PEAKING";
+    }
+}
+
+inline EQFilterType eq_filter_type_from_str(const char* s) {
+    if (s == nullptr)                   return EQFilterType::PEAKING;
+    if (strcmp(s, "LOW_SHELF")  == 0)   return EQFilterType::LOW_SHELF;
+    if (strcmp(s, "HIGH_SHELF") == 0)   return EQFilterType::HIGH_SHELF;
+    if (strcmp(s, "LOW_PASS")   == 0)   return EQFilterType::LOW_PASS;
+    if (strcmp(s, "HIGH_PASS")  == 0)   return EQFilterType::HIGH_PASS;
+    return EQFilterType::PEAKING;
 }
 
 #endif // CONFIG_SCHEMA_H

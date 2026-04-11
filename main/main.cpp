@@ -6,6 +6,7 @@
 #include "audio/i2s_master.h"
 #include "audio/audio_buffer.h"
 #include "audio/audio_capture.h"
+#include "audio/eq_processor.h"
 #include "network/wifi_manager.h"
 #include "network/config_portal.h"
 #include "network/http_server.h"
@@ -142,6 +143,12 @@ static bool init() {
         AudioCapture::set_threshold_db(loaded_config.audio_threshold_db);
         ESP_LOGI(TAG, "Audio threshold set to %.1f dB", loaded_config.audio_threshold_db);
     }
+
+    // Step: EQ Processor (initialize before audio capture starts)
+    EQProcessor::init(loaded_config, sample_rate);
+    ESP_LOGI(TAG, "EQ processor initialized (%u active bands, %s)",
+             EQProcessor::active_band_count(),
+             EQProcessor::is_enabled() ? "enabled" : "bypassed");
     
     // Step: MQTT Client (optional - only if enabled in config)
     if (has_config && loaded_config.mqtt_enabled) {
